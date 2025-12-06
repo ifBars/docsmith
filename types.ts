@@ -1,0 +1,61 @@
+
+export enum AppStep {
+  LANDING = 'LANDING',
+  ANALYZING = 'ANALYZING',
+  OVERVIEW = 'OVERVIEW',
+  PLANNING = 'PLANNING',
+  DRAFTING = 'DRAFTING',
+}
+
+export enum DocFramework {
+  SINGLE_FILE = 'Single File (README)',
+  VITEPRESS = 'VitePress',
+  DOCUSAURUS = 'Docusaurus',
+  FUMADOCS = 'Fumadocs',
+  DOCFX = 'DocFX',
+}
+
+// Result from Gemini Analysis
+export interface RepoContext {
+  summary: string;
+  techStack: string[];
+  entryPoints: string[];
+  keyModules: Array<{ name: string; responsibility: string }>;
+  workflows: string[]; // User journeys
+  artifacts: {
+    projectOverview: string;
+    gettingStarted: string;
+    architecture: string;
+    commonTasks: string;
+  };
+  // Q&A to verify AI understanding and measure context quality
+  benchmarks: Array<{ question: string; answer: string }>; 
+}
+
+export interface Section {
+  id: string;
+  title: string;
+  description: string; // Prompt hint for the AI
+  content?: string; // The generated markdown
+  isDrafted: boolean;
+}
+
+export interface DocFile {
+  id: string;
+  path: string; // e.g. "docs/guide/intro.md" or "README.md"
+  title: string; // Display title
+  description: string; // Purpose of this file
+  sections: Section[]; // The content structure of this file
+  isLoaded: boolean; // Have we generated the outline (sections) yet?
+}
+
+export interface FileSummary {
+  path: string;
+  contentSnippet: string; // First 30k chars
+}
+
+// Real representation of a repo data structure
+export interface RepoData {
+  url: string;
+  files: FileSummary[];
+}

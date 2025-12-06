@@ -1,0 +1,5 @@
+{
+  "name": "DocSmith",
+  "description": "AI-powered documentation generator that analyzes GitHub repositories to create human-first, concise documentation.",
+  "requestFramePermissions": []
+}
