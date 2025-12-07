@@ -1,5 +1,3 @@
-
-
 import React, { useState, useRef } from 'react';
 import { AppStep, DocFramework, RepoContext, DocFile, FileSummary } from './types';
 import { RepoInput, LoadingState, AnalysisStep } from './components/RepoInput';
@@ -42,6 +40,7 @@ const App: React.FC = () => {
     logsRef.current = [];
     progressRef.current = 0;
     setSourceFiles([]);
+    setRepoContext(null); // Clear previous context
     
     // Phase 1: Connection
     updateLoading("Initializing secure connection...", 'CONNECT', 5, "Resolving host github.com...");
@@ -64,29 +63,39 @@ const App: React.FC = () => {
       // Phase 3: AI Analysis (Real-time updates via Tool Calls)
       updateLoading("Gemini 3 Pro Reasoning Engine engaged...", 'ANALYZE', 35, "Initializing analysis context window...");
       
-      const analysis = await analyzeRepo(repoData.files, (status, progress) => {
-         // Map the AI's 0-100 progress to our overall progress bar
-         // AI Investigation phase (0-90) maps to 35-85
-         // AI Synthesis phase (95+) maps to 85-99
-         let normalizedProgress = 35;
-         
-         if (progress >= 95 || status.includes("Synthesizing")) {
-            normalizedProgress = 92; // Jump to end for synthesis
-         } else {
-            normalizedProgress = 35 + Math.floor((progress * 0.5));
-         }
+      // We initialize context immediately so we can render the view
+      const initialContext: RepoContext = {
+        summary: "",
+        techStack: [],
+        entryPoints: [],
+        keyModules: [],
+        workflows: [],
+        artifacts: { projectOverview: "", gettingStarted: "", architecture: "", commonTasks: "" },
+        benchmarks: []
+      };
+      setRepoContext(initialContext);
 
-         updateLoading(status, 'ANALYZE', normalizedProgress, status);
-      });
+      // Streaming Analysis Call
+      const finalAnalysis = await analyzeRepo(
+        repoData.files, 
+        (status, progress) => {
+          // Progress Callback
+          let normalizedProgress = 35;
+          // Scale 0-100 from service to 35-100 in UI
+          normalizedProgress = 35 + Math.floor(progress * 0.65);
+          updateLoading(status, 'ANALYZE', normalizedProgress, status);
+        },
+        (partialContext) => {
+          // Partial Data Callback - Update UI in real-time
+          setRepoContext(prev => prev ? ({ ...prev, ...partialContext }) : partialContext as RepoContext);
+        }
+      );
       
       // Phase 4: Finalization
-      updateLoading("Synthesizing artifacts...", 'GENERATE', 98, "Compiling final system report...");
-      await new Promise(resolve => setTimeout(resolve, 800));
-      
       updateLoading("Analysis Complete", 'GENERATE', 100, "Ready for review.");
       await new Promise(resolve => setTimeout(resolve, 400));
 
-      setRepoContext(analysis);
+      setRepoContext(finalAnalysis);
       setStep(AppStep.OVERVIEW);
     } catch (error) {
       console.error(error);
