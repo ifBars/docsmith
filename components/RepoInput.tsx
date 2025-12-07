@@ -50,10 +50,6 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
 
       <div className="z-10 w-full max-w-2xl px-6">
         <div className="mb-12 text-center">
-          <div className="inline-flex items-center gap-2 text-accent border border-accent/20 bg-accent/5 px-3 py-1 mb-6 font-mono text-xs uppercase tracking-widest">
-            <Terminal className="w-3 h-3" />
-            System Ready
-          </div>
           <h1 className="text-5xl md:text-7xl font-bold text-white mb-2 tracking-tighter">
             DOC<span className="text-zinc-600">SMITH</span>
           </h1>
