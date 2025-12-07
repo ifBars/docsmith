@@ -4,11 +4,16 @@ import { Terminal, Command, Hash, Loader2 } from 'lucide-react';
 
 export type AnalysisStep = 'CONNECT' | 'FETCH' | 'ANALYZE' | 'GENERATE';
 
+export interface LogEntry {
+  message: string;
+  timestamp: string;
+}
+
 export interface LoadingState {
   status: string;
   progress: number;
   currentStep: AnalysisStep;
-  logs: string[];
+  logs: LogEntry[];
 }
 
 interface RepoInputProps {
@@ -30,7 +35,7 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
     }
-  }, [loadingState?.logs]);
+  }, [loadingState?.logs.length, loadingState?.status]);
 
   const isLoading = loadingState !== null;
 
@@ -159,9 +164,9 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
                    {loadingState.logs.map((log, i) => (
                       <div key={i} className="flex gap-2 animate-in fade-in slide-in-from-left-1 duration-200">
                         <span className="text-zinc-600 shrink-0">
-                          {new Date().toLocaleTimeString('en-US', {hour12: false, hour: "2-digit", minute:"2-digit", second:"2-digit"})}
+                          {log.timestamp}
                         </span>
-                        <span className="text-zinc-400 font-light">{log}</span>
+                        <span className="text-zinc-400 font-light">{log.message}</span>
                       </div>
                    ))}
                    <div className="animate-pulse text-accent">_</div>

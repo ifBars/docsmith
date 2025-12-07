@@ -1,5 +1,7 @@
 import { GoogleGenAI, Type, Schema, FunctionDeclaration } from "@google/genai";
-import { DocFramework, FileSummary, RepoContext, Section, DocFile } from '../types';
+import { DocFramework, FileSummary, RepoContext, Section, DocFile, ReferenceRepo } from '../types';
+import { embedChunks, retrieveContext } from './ragService';
+import { fetchRepoData } from './mockGithubService';
 
 const apiKey = process.env.API_KEY || ''; 
 const ai = new GoogleGenAI({ apiKey });
@@ -29,8 +31,21 @@ export const analyzeRepo = async (
       architecture: "",
       commonTasks: "",
     },
-    benchmarks: []
+    benchmarks: [],
+    vectorIndex: [],
+    referenceRepos: []
   };
+
+  // Step 1: Generate Embeddings for RAG (Async background usually, but here we block to ensure readiness)
+  if (onProgress) onProgress("Indexing repository content for RAG...", 10);
+  try {
+     const chunks = await embedChunks(files, 'MAIN', (count, total) => {
+        if (onProgress) onProgress(`Embedding code chunks (${count}/${total})...`, 15 + Math.floor((count/total) * 10));
+     });
+     currentContext.vectorIndex = chunks;
+  } catch (e) {
+     console.warn("RAG Indexing failed, continuing with context only.", e);
+  }
 
   const systemPrompt = `
     You are a Principal Software Architect conducting a deep-dive audit of a codebase.
@@ -43,24 +58,22 @@ export const analyzeRepo = async (
     ${filesContext}
 
     INSTRUCTIONS:
-    1. **Iterative Discovery**: Do not try to do everything at once. Analyze one aspect, then call the relevant tool to save it.
+    1. **Iterative Discovery**: Analyze one aspect, then call the relevant tool to save it. Do not batch all tools into a single turn if possible.
     2. **Deep Dive**: When analyzing architecture, look for data flow, state management patterns, and external integrations.
     3. **Strict Grounding**: 
        - Do NOT hallucinate features not present in the code. 
        - If a file mentions a config but the config file isn't present, note it as "inferred".
     
-    REQUIRED STEPS (Call these tools in any logical order, but ALL must be called):
+    REQUIRED STEPS (Call these tools in a logical sequence to populate the report):
     - \`commit_overview\`: High-level summary and tech stack.
     - \`commit_architecture\`: Modules, entry points, and responsibilities.
-    - \`commit_workflows\`: Critical user journeys (e.g., "User logs in -> Token stored -> Dashboard fetches data").
-    - \`commit_artifacts\`: Draft the raw documentation content based on findings.
+    - \`commit_workflows\`: Critical user journeys.
+    - \`commit_artifacts\`: Draft the raw documentation content.
     - \`commit_benchmarks\`: Generate QA verification questions.
+    - \`signal_complete\`: Call this ONLY when all other steps are done.
 
     CRITICAL RULE FOR BENCHMARKS:
-    - You MUST avoid generic questions like "How does the code work?".
     - Questions MUST reference specific file names, variable names, or specific logic pathways found in the provided text.
-    - Bad: "What database is used?"
-    - Good: "In db.ts, how does the connection pool handle timeouts during high load?"
     - If you hallucinate functionality in benchmarks, the audit will fail.
   `;
 
@@ -162,6 +175,8 @@ export const analyzeRepo = async (
     let messages: any[] = [{ role: 'user', parts: [{ text: systemPrompt }] }];
     let isComplete = false;
     
+    if (onProgress) onProgress("Initializing Reasoning Engine...", 30);
+
     // We allow up to 15 turns for deep analysis
     for (let turn = 0; turn < 15; turn++) {
       if (isComplete) break;
@@ -194,23 +209,23 @@ export const analyzeRepo = async (
              currentContext.summary = args.summary;
              currentContext.techStack = args.techStack;
              statusUpdate = "Identified Tech Stack & Summary";
-             progressUpdate = 20;
+             progressUpdate = 40;
           } 
           else if (call.name === "commit_architecture") {
              currentContext.entryPoints = args.entryPoints;
              currentContext.keyModules = args.keyModules;
              statusUpdate = "Mapped Architecture & Modules";
-             progressUpdate = 40;
+             progressUpdate = 55;
           }
           else if (call.name === "commit_workflows") {
              currentContext.workflows = args.workflows;
              statusUpdate = "Traced User Journeys";
-             progressUpdate = 60;
+             progressUpdate = 70;
           }
           else if (call.name === "commit_artifacts") {
              currentContext.artifacts = args;
              statusUpdate = "Drafted Documentation Artifacts";
-             progressUpdate = 80;
+             progressUpdate = 85;
           }
           else if (call.name === "commit_benchmarks") {
              currentContext.benchmarks = args.benchmarks;
@@ -220,11 +235,14 @@ export const analyzeRepo = async (
           else if (call.name === "signal_complete") {
              isComplete = true;
              statusUpdate = "Analysis Finalized";
-             progressUpdate = 100;
+             progressUpdate = 98; // Leave room for refinement
           }
 
           if (onProgress && statusUpdate) {
             onProgress(statusUpdate, progressUpdate);
+            // UX FIX: Artificial delay to ensure user sees the progress steps
+            // even if the model batches multiple tool calls in one response.
+            await new Promise(resolve => setTimeout(resolve, 800));
           }
 
           // Emit partial update to UI
@@ -247,10 +265,100 @@ export const analyzeRepo = async (
       } 
     }
 
+    // Step 4: Fine-tune Artifacts with Benchmarks (Self-Correction Phase)
+    if (currentContext.benchmarks.length > 0 && currentContext.artifacts.projectOverview) {
+       if (onProgress) onProgress("Fine-tuning analysis with Benchmarks...", 99);
+       const refinedArtifacts = await refineArtifactsWithBenchmarks(currentContext);
+       currentContext.artifacts = refinedArtifacts;
+       if (onPartialUpdate) onPartialUpdate({ ...currentContext });
+    }
+
     return currentContext;
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
     throw error;
+  }
+};
+
+/**
+ * Self-Correction Phase:
+ * Uses the generated Benchmarks (which are grounded in specific code logic)
+ * to verify and update the high-level Artifacts.
+ */
+const refineArtifactsWithBenchmarks = async (context: RepoContext): Promise<RepoContext['artifacts']> => {
+  const prompt = `
+    You are a Principal Architect.
+    
+    OBJECTIVE: 
+    Refine the system documentation artifacts based on the passed Benchmarks (Ground Truth).
+    
+    INPUT DATA:
+    1. Benchmarks (Q&A derived from code): ${JSON.stringify(context.benchmarks)}
+    2. Current Artifacts (Drafts): ${JSON.stringify(context.artifacts)}
+    
+    INSTRUCTIONS:
+    - Read the Benchmarks. They represent specific, verified facts about the codebase.
+    - Read the Current Artifacts.
+    - If an Artifact contradicts a Benchmark, rewrite the Artifact section to match the Benchmark.
+    - If a Benchmark contains specific details (variable names, logic paths) that are missing from the Artifacts, enrich the Artifacts with these details.
+    - Return the fully updated Artifacts object.
+  `;
+
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      projectOverview: { type: Type.STRING },
+      gettingStarted: { type: Type.STRING },
+      architecture: { type: Type.STRING },
+      commonTasks: { type: Type.STRING }
+    },
+    required: ["projectOverview", "gettingStarted", "architecture", "commonTasks"]
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: ANALYSIS_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
+    });
+
+    return JSON.parse(response.text || '{}');
+  } catch (e) {
+    console.error("Benchmark Refinement Failed", e);
+    return context.artifacts;
+  }
+};
+
+export const processReferenceRepo = async (
+  repoUrl: string, 
+  context: RepoContext,
+  onProgress?: (status: string) => void
+): Promise<RepoContext> => {
+  try {
+     if (onProgress) onProgress("Fetching reference repo...");
+     const repoData = await fetchRepoData(repoUrl);
+     
+     if (onProgress) onProgress("Indexing reference usage patterns...");
+     const chunks = await embedChunks(repoData.files, 'REFERENCE');
+     
+     const newRefRepo: ReferenceRepo = {
+        url: repoUrl,
+        files: repoData.files,
+        status: 'indexed'
+     };
+
+     return {
+        ...context,
+        vectorIndex: [...context.vectorIndex, ...chunks],
+        referenceRepos: [...context.referenceRepos, newRefRepo]
+     };
+
+  } catch (e) {
+     console.error("Failed to process ref repo", e);
+     throw e;
   }
 };
 
@@ -372,8 +480,27 @@ export const generateDocOutline = async (fileName: string, filePurpose: string, 
 export const draftSectionContent = async (
   section: Section, 
   fileName: string,
-  context: RepoContext
+  context: RepoContext,
+  onDraftingLog?: (msg: string) => void
 ): Promise<string> => {
+  
+  // 1. RAG Retrieval
+  let retrievedContext = "";
+  if (context.vectorIndex.length > 0) {
+     if (onDraftingLog) onDraftingLog("Retrieving relevant code chunks...");
+     
+     // Construct query from section metadata
+     const query = `${fileName} - ${section.title}: ${section.description}`;
+     const chunks = await retrieveContext(query, context.vectorIndex, 4);
+     
+     if (chunks.length > 0) {
+        retrievedContext = chunks.map(c => `[Source: ${c.sourceFile}]\n${c.text}`).join('\n\n');
+        if (onDraftingLog) onDraftingLog(`Found ${chunks.length} relevant code snippets.`);
+     } else {
+        if (onDraftingLog) onDraftingLog("No specific code chunks found, utilizing general context.");
+     }
+  }
+
   const prompt = `
     You are a Technical Writer. Write the content for one section of a documentation file.
     
@@ -383,13 +510,17 @@ export const draftSectionContent = async (
     Instructions:
     ${section.description}
     
-    Context Information:
+    General Project Context:
     ${JSON.stringify(context.artifacts)}
+
+    SPECIFIC RETRIEVED CODE CONTEXT (Use this for examples/accuracy):
+    ${retrievedContext}
     
     Guidelines:
     - Format: Markdown.
     - Use clear headings, code blocks, and lists.
-    - Do NOT include the section title as an H1/H2 at the top (it is handled by the parent renderer). Start directly with content.
+    - Do NOT include the section title as an H1/H2 at the top.
+    - If retrieved context contains usage examples from Reference Repos, prioritize using them as real-world examples.
     - Be concise but comprehensive.
   `;
 
@@ -403,6 +534,60 @@ export const draftSectionContent = async (
   } catch (error) {
     console.error("Gemini Drafting Error:", error);
     return "Error generating content. Please try again.";
+  }
+};
+
+export const fineTuneContentWithBenchmarks = async (
+  currentContent: string,
+  sectionContext: string,
+  benchmarks: RepoContext['benchmarks']
+): Promise<{ refinedContent: string; appliedFixes: string[] }> => {
+  const prompt = `
+    You are a Senior Editor. 
+    Review the provided documentation content and ensure it accurately answers the project's benchmark questions.
+    
+    Benchmarks (Truth Sources):
+    ${JSON.stringify(benchmarks)}
+    
+    Section Context: ${sectionContext}
+    
+    Current Content:
+    ${currentContent}
+    
+    Task:
+    1. Identify if any Benchmark questions are relevant to this section but are answered incorrectly or missing.
+    2. Rewrite the content to seamlessly integrate the correct answers.
+    3. If the content is already perfect, return it as is.
+    4. List specific fixes applied.
+  `;
+
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      refinedContent: { type: Type.STRING },
+      appliedFixes: { type: Type.ARRAY, items: { type: Type.STRING } }
+    },
+    required: ["refinedContent", "appliedFixes"]
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: DRAFTING_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
+    });
+    
+    const result = JSON.parse(response.text || '{}');
+    return {
+      refinedContent: result.refinedContent || currentContent,
+      appliedFixes: result.appliedFixes || []
+    };
+  } catch (e) {
+    console.error("Fine tuning failed", e);
+    return { refinedContent: currentContent, appliedFixes: [] };
   }
 };
 
@@ -431,6 +616,57 @@ export const refineContent = async (
     return content;
   }
 };
+
+export const auditSectionContent = async (
+  section: Section,
+  fileName: string,
+  context: RepoContext
+): Promise<{ hasIssues: boolean; suggestion?: string; reason?: string }> => {
+  const prompt = `
+    You are a Senior Technical Editor auditing documentation accuracy.
+    
+    GROUND TRUTH (Codebase Analysis):
+    ${JSON.stringify(context.artifacts)}
+    Key Modules: ${JSON.stringify(context.keyModules)}
+    
+    DOCUMENTATION FILE: ${fileName}
+    SECTION: ${section.title}
+    CURRENT CONTENT:
+    ${section.content || '(Empty)'}
+    
+    TASK:
+    1. Check if the Current Content contradicts the Ground Truth or is missing critical details known from the code.
+    2. Check for "placeholder" text, generic fluff, or outdated API usages.
+    3. If the content is accurate and sufficient, set "hasIssues" to false.
+    4. If there are issues (outdated, wrong, or weak), set "hasIssues" to true, provide a specific "reason", and rewrite the content fully in "suggestion".
+  `;
+
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      hasIssues: { type: Type.BOOLEAN },
+      reason: { type: Type.STRING },
+      suggestion: { type: Type.STRING },
+    },
+    required: ["hasIssues"]
+  };
+
+  try {
+     const response = await ai.models.generateContent({
+      model: DRAFTING_MODEL, // Flash is fine for this
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: schema,
+      }
+    });
+    
+    return JSON.parse(response.text || '{}');
+  } catch (e) {
+    console.error("Audit failed", e);
+    return { hasIssues: false };
+  }
+}
 
 /**
  * NEW: Analyzes existing repo files to reconstruct a DocSmith project structure

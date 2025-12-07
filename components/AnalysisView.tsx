@@ -1,23 +1,30 @@
-
 import React, { useState } from 'react';
 import { RepoContext } from '../types';
 import { Button } from './ui/Button';
-import { Box, Play, ArrowRight, Cpu, FileJson, CheckCircle2, AlertCircle, Target, Loader2 } from 'lucide-react';
+import { Box, Play, ArrowRight, Cpu, FileJson, CheckCircle2, Target, Loader2, GitFork, Plus, ExternalLink, Link } from 'lucide-react';
+import { processReferenceRepo } from '../services/geminiService';
 
 interface AnalysisViewProps {
   context: RepoContext;
   onNext: () => void;
+  onUpdateContext?: (context: RepoContext) => void;
 }
 
-export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext }) => {
+export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext, onUpdateContext }) => {
   const [showBenchmarks, setShowBenchmarks] = useState(true);
+  const [refRepoUrl, setRefRepoUrl] = useState('');
+  const [isProcessingRef, setIsProcessingRef] = useState(false);
+  
+  // Local state for context to allow updates when adding ref repos
+  const [localContext, setLocalContext] = useState<RepoContext>(context);
 
   // Safety checks
-  const modules = context.keyModules || [];
-  const workflows = context.workflows || [];
-  const stack = context.techStack || [];
-  const benchmarks = context.benchmarks || [];
-  const summary = context.summary || "";
+  const modules = localContext.keyModules || [];
+  const workflows = localContext.workflows || [];
+  const stack = localContext.techStack || [];
+  const benchmarks = localContext.benchmarks || [];
+  const summary = localContext.summary || "";
+  const refRepos = localContext.referenceRepos || [];
 
   // Loading Helper
   const LoadingPlaceholder = ({ label }: { label: string }) => (
@@ -26,6 +33,23 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext }) =
        <span className="text-xs font-mono uppercase tracking-wider">{label}</span>
     </div>
   );
+
+  const handleAddRefRepo = async () => {
+     if (!refRepoUrl) return;
+     setIsProcessingRef(true);
+     try {
+        const updatedContext = await processReferenceRepo(refRepoUrl, localContext);
+        setLocalContext(updatedContext);
+        setRefRepoUrl('');
+        if (onUpdateContext) {
+           onUpdateContext(updatedContext);
+        }
+     } catch (e) {
+        alert("Failed to add reference repo");
+     } finally {
+        setIsProcessingRef(false);
+     }
+  };
 
   return (
     <div className="h-full flex flex-col bg-zinc-950">
@@ -112,6 +136,52 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext }) =
              )}
           </div>
 
+          {/* Reference Repos Section */}
+          <div className="p-8 border-b border-zinc-800 bg-zinc-900">
+              <div className="flex items-center gap-2 text-zinc-500 mb-4 font-mono text-xs uppercase">
+                  <GitFork className="w-4 h-4" /> Reference & Usage Repositories (RAG Context)
+              </div>
+              <p className="text-zinc-400 text-sm mb-4 max-w-2xl">
+                Add repositories that use this project to the knowledge base. The AI will index them to find real-world usage examples when writing documentation.
+              </p>
+              
+              <div className="flex flex-col gap-3 max-w-3xl">
+                  {refRepos.map((repo, i) => (
+                     <div key={i} className="flex items-center justify-between bg-zinc-950 border border-zinc-800 p-3 rounded-sm">
+                        <div className="flex items-center gap-3">
+                           <ExternalLink className="w-4 h-4 text-zinc-600" />
+                           <span className="text-zinc-300 font-mono text-sm">{repo.url}</span>
+                        </div>
+                        <span className="text-[10px] bg-green-900/20 text-green-500 px-2 py-1 rounded-sm uppercase tracking-wider border border-green-900/50">
+                           {repo.status}
+                        </span>
+                     </div>
+                  ))}
+
+                  <div className="flex gap-2">
+                     <div className="relative flex-grow">
+                        <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-600" />
+                        <input 
+                           className="w-full bg-zinc-950 border border-zinc-800 h-10 pl-10 pr-4 text-sm text-white focus:outline-none focus:border-accent placeholder-zinc-700 font-mono"
+                           placeholder="https://github.com/owner/usage-example-repo"
+                           value={refRepoUrl}
+                           onChange={(e) => setRefRepoUrl(e.target.value)}
+                           onKeyDown={(e) => e.key === 'Enter' && handleAddRefRepo()}
+                        />
+                     </div>
+                     <Button 
+                        onClick={handleAddRefRepo} 
+                        disabled={!refRepoUrl || isProcessingRef} 
+                        loading={isProcessingRef}
+                        variant="secondary"
+                        icon={<Plus className="w-4 h-4" />}
+                     >
+                        ADD REPO
+                     </Button>
+                  </div>
+              </div>
+          </div>
+
           {/* Middle Grid: Modules & Workflows */}
           <div className="grid grid-cols-1 md:grid-cols-2 border-b border-zinc-800">
             {/* Key Modules */}
@@ -134,7 +204,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext }) =
                     <div className="p-8 flex justify-center">
                        <LoadingPlaceholder label="Mapping Architecture..." />
                     </div>
-                  )}
+                 )}
                </div>
             </div>
 
@@ -174,11 +244,11 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext }) =
              <div className="grid grid-cols-1 lg:grid-cols-2 text-xs font-mono text-zinc-500">
                 <div className="p-4 border-b lg:border-b-0 lg:border-r border-zinc-800 max-h-64 overflow-y-auto min-h-[100px]">
                    <strong className="block text-zinc-300 mb-2"># Project Overview</strong>
-                   {context.artifacts.projectOverview ? context.artifacts.projectOverview : <span className="opacity-50">Drafting...</span>}
+                   {localContext.artifacts.projectOverview ? localContext.artifacts.projectOverview : <span className="opacity-50">Drafting...</span>}
                 </div>
                 <div className="p-4 max-h-64 overflow-y-auto min-h-[100px]">
                    <strong className="block text-zinc-300 mb-2"># Architecture</strong>
-                   {context.artifacts.architecture ? context.artifacts.architecture : <span className="opacity-50">Drafting...</span>}
+                   {localContext.artifacts.architecture ? localContext.artifacts.architecture : <span className="opacity-50">Drafting...</span>}
                 </div>
              </div>
           </div>

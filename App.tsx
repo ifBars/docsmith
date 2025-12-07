@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { AppStep, DocFramework, RepoContext, DocFile, FileSummary } from './types';
-import { RepoInput, LoadingState, AnalysisStep } from './components/RepoInput';
+import { RepoInput, LoadingState, AnalysisStep, LogEntry } from './components/RepoInput';
 import { AnalysisView } from './components/AnalysisView';
 import { DocPlanner } from './components/DocPlanner';
 import { DocEditor } from './components/DocEditor';
@@ -19,13 +19,18 @@ const App: React.FC = () => {
   const [sourceFiles, setSourceFiles] = useState<FileSummary[]>([]);
 
   // We need refs to access current state inside intervals without dependencies
-  const logsRef = useRef<string[]>([]);
+  const logsRef = useRef<LogEntry[]>([]);
   const progressRef = useRef<number>(0);
 
   // Helper to update loading state safely
   const updateLoading = (status: string, step: AnalysisStep, progress: number, newLog?: string) => {
     progressRef.current = progress;
-    if (newLog) logsRef.current = [...logsRef.current, newLog];
+    if (newLog) {
+      logsRef.current = [...logsRef.current, {
+        message: newLog,
+        timestamp: new Date().toLocaleTimeString('en-US', {hour12: false, hour: "2-digit", minute:"2-digit", second:"2-digit"})
+      }];
+    }
     
     setLoadingState({
       status,
@@ -71,7 +76,9 @@ const App: React.FC = () => {
         keyModules: [],
         workflows: [],
         artifacts: { projectOverview: "", gettingStarted: "", architecture: "", commonTasks: "" },
-        benchmarks: []
+        benchmarks: [],
+        vectorIndex: [],
+        referenceRepos: []
       };
       setRepoContext(initialContext);
 
@@ -182,7 +189,8 @@ const App: React.FC = () => {
           {step === AppStep.OVERVIEW && repoContext && (
             <AnalysisView 
               context={repoContext} 
-              onNext={() => setStep(AppStep.PLANNING)} 
+              onNext={() => setStep(AppStep.PLANNING)}
+              onUpdateContext={setRepoContext}
             />
           )}
 
