@@ -128,18 +128,30 @@ const App: React.FC = () => {
   };
 
   // Nav Item Component
-  const NavItem = ({ icon: Icon, active, onClick }: { icon: any, active?: boolean, onClick?: () => void }) => (
-    <button 
-      onClick={onClick}
-      className={`p-3 w-full flex justify-center mb-2 transition-colors border-l-2 ${
-        active 
-          ? 'border-accent text-white bg-zinc-900' 
-          : 'border-transparent text-zinc-500 hover:text-zinc-300'
-      }`}
-    >
-      <Icon className="w-5 h-5" />
-    </button>
-  );
+  const NavItem = ({ icon: Icon, active, onClick, href }: { icon: any, active?: boolean, onClick?: () => void, href?: string }) => {
+    const className = `p-3 w-full flex justify-center mb-2 transition-colors border-l-2 ${
+      active 
+        ? 'border-accent text-white bg-zinc-900' 
+        : 'border-transparent text-zinc-500 hover:text-zinc-300'
+    }`;
+
+    if (href) {
+      return (
+        <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
+          <Icon className="w-5 h-5" />
+        </a>
+      );
+    }
+
+    return (
+      <button 
+        onClick={onClick}
+        className={className}
+      >
+        <Icon className="w-5 h-5" />
+      </button>
+    );
+  };
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100 overflow-hidden font-sans">
@@ -174,7 +186,7 @@ const App: React.FC = () => {
         )}
 
         <div className="mt-auto">
-          <NavItem icon={Github} />
+          <NavItem icon={Github} href="https://github.com/ifBars/docsmith" />
           <NavItem icon={Settings} />
         </div>
       </nav>
