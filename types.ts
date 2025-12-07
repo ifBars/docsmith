@@ -1,4 +1,5 @@
 
+
 export enum AppStep {
   LANDING = 'LANDING',
   ANALYZING = 'ANALYZING',
@@ -8,6 +9,7 @@ export enum AppStep {
 }
 
 export enum DocFramework {
+  EXISTING = 'Existing Documentation',
   SINGLE_FILE = 'Single File (README)',
   VITEPRESS = 'VitePress',
   DOCUSAURUS = 'Docusaurus',
@@ -47,6 +49,7 @@ export interface DocFile {
   description: string; // Purpose of this file
   sections: Section[]; // The content structure of this file
   isLoaded: boolean; // Have we generated the outline (sections) yet?
+  isExisting?: boolean; // Was this imported from the repo?
 }
 
 export interface FileSummary {

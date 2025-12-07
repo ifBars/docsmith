@@ -1,3 +1,5 @@
+
+
 import { GoogleGenAI, Type, Schema, FunctionDeclaration } from "@google/genai";
 import { DocFramework, FileSummary, RepoContext, Section, DocFile } from '../types';
 
@@ -377,3 +379,83 @@ export const refineContent = async (
     return content;
   }
 };
+
+/**
+ * NEW: Analyzes existing repo files to reconstruct a DocSmith project structure
+ * so users can edit existing documentation.
+ */
+export const importExistingDocs = (files: FileSummary[]): DocFile[] => {
+  const docFiles = files.filter(f => 
+    f.path.endsWith('.md') || 
+    f.path.endsWith('.mdx') ||
+    f.path.toLowerCase() === 'readme.md' ||
+    f.path.toLowerCase().includes('docs/')
+  );
+  
+  return docFiles.map(f => {
+     // Parse content into sections for the editor
+     const sections = parseMarkdownSections(f.contentSnippet);
+     
+     return {
+        id: Math.random().toString(36).substring(7),
+        path: f.path,
+        title: f.path.split('/').pop()?.replace(/\.mdx?$/, '') || 'Untitled',
+        description: 'Existing file imported from repository.',
+        sections: sections,
+        isLoaded: true,
+        isExisting: true
+     };
+  });
+};
+
+// Helper to split markdown into editable sections
+function parseMarkdownSections(content: string): Section[] {
+  const lines = content.split('\n');
+  const sections: Section[] = [];
+  
+  let currentTitle = "Introduction";
+  let currentBuffer: string[] = [];
+  
+  const flush = () => {
+    if (currentBuffer.length > 0 || currentTitle !== "Introduction") {
+      // Clean up the buffer - remove leading blank lines
+      let text = currentBuffer.join('\n').trim();
+      
+      sections.push({
+        id: Math.random().toString(36).substring(7),
+        title: currentTitle,
+        description: `Existing content for ${currentTitle}`,
+        content: text,
+        isDrafted: true
+      });
+      currentBuffer = [];
+    }
+  };
+
+  for (const line of lines) {
+    // Detect H1 or H2 as section breaks
+    const headerMatch = line.match(/^(#{1,2})\s+(.+)$/);
+    if (headerMatch) {
+      flush();
+      currentTitle = headerMatch[2].trim();
+      // We do NOT add the header line to the content buffer, 
+      // as the Editor renders the title separately.
+    } else {
+      currentBuffer.push(line);
+    }
+  }
+  flush();
+
+  if (sections.length === 0) {
+    // Fallback for empty file
+     sections.push({
+        id: Math.random().toString(36).substring(7),
+        title: "Content",
+        description: "Existing content",
+        content: content,
+        isDrafted: true
+      });
+  }
+
+  return sections;
+}

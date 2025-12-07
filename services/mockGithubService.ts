@@ -1,4 +1,5 @@
 
+
 import { FileSummary, RepoData } from '../types';
 
 const GITHUB_API_BASE = 'https://api.github.com/repos';
@@ -101,12 +102,14 @@ function selectRelevantFiles(allPaths: string[]): string[] {
     const lower = p.toLowerCase();
     
     // 1. Existing Documentation is highest priority
-    if (lower.includes('docs/') && lower.endsWith('.md')) score += 20;
-    if (lower === 'readme.md') score += 15;
-    if (lower.includes('contributing')) score += 10;
+    if (lower.includes('docs/') && lower.endsWith('.md')) score += 50; // Boosted
+    if (lower.includes('docs/') && lower.endsWith('.mdx')) score += 50; // Boosted
+    if (lower === 'readme.md') score += 40; // Boosted
+    if (lower.includes('contributing')) score += 30;
     
     // 2. Configuration defines the framework
-    if (lower.endsWith('package.json') || lower.endsWith('go.mod') || lower.endsWith('cargo.toml')) score += 8;
+    if (lower.endsWith('package.json') || lower.endsWith('go.mod') || lower.endsWith('cargo.toml')) score += 15;
+    if (lower.endsWith('docusaurus.config.js') || lower.includes('vite.config')) score += 20; // Configs important for identifying framework
     if (lower.includes('tsconfig')) score += 5;
     if (lower.includes('dockerfile')) score += 5;
     

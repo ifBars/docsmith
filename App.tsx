@@ -1,5 +1,7 @@
+
+
 import React, { useState, useRef } from 'react';
-import { AppStep, DocFramework, RepoContext, DocFile } from './types';
+import { AppStep, DocFramework, RepoContext, DocFile, FileSummary } from './types';
 import { RepoInput, LoadingState, AnalysisStep } from './components/RepoInput';
 import { AnalysisView } from './components/AnalysisView';
 import { DocPlanner } from './components/DocPlanner';
@@ -16,6 +18,7 @@ const App: React.FC = () => {
   const [repoContext, setRepoContext] = useState<RepoContext | null>(null);
   const [activeFramework, setActiveFramework] = useState<DocFramework | null>(null);
   const [projectFiles, setProjectFiles] = useState<DocFile[]>([]);
+  const [sourceFiles, setSourceFiles] = useState<FileSummary[]>([]);
 
   // We need refs to access current state inside intervals without dependencies
   const logsRef = useRef<string[]>([]);
@@ -38,6 +41,7 @@ const App: React.FC = () => {
     // Reset
     logsRef.current = [];
     progressRef.current = 0;
+    setSourceFiles([]);
     
     // Phase 1: Connection
     updateLoading("Initializing secure connection...", 'CONNECT', 5, "Resolving host github.com...");
@@ -49,6 +53,7 @@ const App: React.FC = () => {
       // Phase 2: Fetch
       updateLoading("Retrieving repository metadata...", 'FETCH', 15, `Targeting repository: ${url}`);
       const repoData = await fetchRepoData(url);
+      setSourceFiles(repoData.files); // Store raw files
       
       updateLoading("Processing source files...", 'FETCH', 25, `Successfully retrieved ${repoData.files.length} candidate files.`);
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -174,6 +179,7 @@ const App: React.FC = () => {
 
           {step === AppStep.PLANNING && repoContext && (
             <DocPlanner 
+              sourceFiles={sourceFiles}
               onGenerateStructure={handleGenerateStructure} 
               onStartDrafting={handleStartDrafting}
               loading={loadingState !== null} 

@@ -1,26 +1,43 @@
 
-import React, { useState } from 'react';
-import { DocFramework, DocFile } from '../types';
+
+import React, { useState, useEffect } from 'react';
+import { DocFramework, DocFile, FileSummary } from '../types';
 import { Button } from './ui/Button';
-import { FileText, ChevronRight, RefreshCw, Layers, Plus, X, List, Box, FileCode, FolderGit2 } from 'lucide-react';
+import { FileText, ChevronRight, RefreshCw, Layers, Plus, X, List, Box, FileCode, FolderGit2, HardDrive } from 'lucide-react';
+import { importExistingDocs } from '../services/geminiService';
 
 interface DocPlannerProps {
+  sourceFiles?: FileSummary[];
   onGenerateStructure: (framework: DocFramework) => Promise<DocFile[]>;
   onStartDrafting: (framework: DocFramework, files: DocFile[]) => void;
   loading: boolean;
 }
 
-export const DocPlanner: React.FC<DocPlannerProps> = ({ onGenerateStructure, onStartDrafting, loading }) => {
+export const DocPlanner: React.FC<DocPlannerProps> = ({ sourceFiles = [], onGenerateStructure, onStartDrafting, loading }) => {
   const [selectedFramework, setSelectedFramework] = useState<DocFramework | null>(null);
   const [files, setFiles] = useState<DocFile[]>([]);
   const [structureLoading, setStructureLoading] = useState(false);
 
+  // Check for existing docs
+  const existingDocsCount = sourceFiles.filter(f => 
+    f.path.endsWith('.md') || f.path.endsWith('.mdx') || f.path.toLowerCase() === 'readme.md'
+  ).length;
+
   const handleSelectFramework = async (framework: DocFramework) => {
     setSelectedFramework(framework);
     setStructureLoading(true);
-    const generatedFiles = await onGenerateStructure(framework);
-    setFiles(generatedFiles);
-    setStructureLoading(false);
+
+    if (framework === DocFramework.EXISTING) {
+       // Local import logic
+       const imported = importExistingDocs(sourceFiles);
+       setFiles(imported);
+       setStructureLoading(false);
+    } else {
+       // AI Generation logic
+       const generatedFiles = await onGenerateStructure(framework);
+       setFiles(generatedFiles);
+       setStructureLoading(false);
+    }
   };
 
   const frameworks = [
@@ -87,14 +104,19 @@ export const DocPlanner: React.FC<DocPlannerProps> = ({ onGenerateStructure, onS
                              placeholder="File purpose..."
                         />
                      </div>
-                     <button 
-                       className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-500 transition-all p-2"
-                       onClick={() => {
-                         setFiles(files.filter(f => f.id !== file.id));
-                       }}
-                     >
-                        <X className="w-4 h-4" />
-                     </button>
+                     <div className="flex items-center gap-2">
+                        {file.isExisting && (
+                          <span className="text-[10px] bg-zinc-800 text-zinc-400 px-2 py-1 rounded-sm border border-zinc-700">EXISTING</span>
+                        )}
+                        <button 
+                          className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-500 transition-all p-2"
+                          onClick={() => {
+                            setFiles(files.filter(f => f.id !== file.id));
+                          }}
+                        >
+                            <X className="w-4 h-4" />
+                        </button>
+                     </div>
                   </div>
                 ))}
                 
@@ -127,6 +149,31 @@ export const DocPlanner: React.FC<DocPlannerProps> = ({ onGenerateStructure, onS
         <h1 className="text-3xl font-bold text-white mb-8 tracking-tight">Select System Architecture</h1>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          
+          {/* Existing Documentation Option */}
+          {existingDocsCount > 0 && (
+            <button
+              onClick={() => handleSelectFramework(DocFramework.EXISTING)}
+              disabled={structureLoading}
+              className={`
+                  group relative border p-6 text-left transition-all h-40 flex flex-col justify-between
+                  ${selectedFramework === DocFramework.EXISTING 
+                    ? 'bg-zinc-900 border-accent' 
+                    : 'bg-zinc-900/30 border-zinc-700 hover:border-zinc-500 hover:bg-zinc-900'
+                  }
+              `}
+            >
+                <div className="flex justify-between items-start">
+                  <HardDrive className={`w-8 h-8 ${selectedFramework === DocFramework.EXISTING ? 'text-accent' : 'text-zinc-400 group-hover:text-white'}`} />
+                  <span className="text-[10px] font-bold bg-zinc-800 text-white px-2 py-0.5 rounded-full">{existingDocsCount} FOUND</span>
+                </div>
+                <div>
+                  <h3 className="font-mono text-sm font-bold text-white mb-1">Existing Docs</h3>
+                  <p className="text-[10px] text-zinc-500 font-mono uppercase leading-tight">Use current repository structure</p>
+                </div>
+            </button>
+          )}
+
           {frameworks.map((fw) => {
             const Icon = fw.icon;
             return (
