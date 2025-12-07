@@ -1,5 +1,3 @@
-
-
 import { GoogleGenAI, Type, Schema, FunctionDeclaration } from "@google/genai";
 import { DocFramework, FileSummary, RepoContext, Section, DocFile } from '../types';
 
@@ -13,105 +11,167 @@ const DRAFTING_MODEL = "gemini-2.5-flash";
 
 export const analyzeRepo = async (
   files: FileSummary[], 
-  onProgress?: (status: string, progress: number) => void
+  onProgress?: (status: string, progress: number) => void,
+  onPartialUpdate?: (partial: Partial<RepoContext>) => void
 ): Promise<RepoContext> => {
   const filesContext = files.map(f => `File: ${f.path}\nContent:\n${f.contentSnippet}`).join('\n---\n');
   
-  // Phase 1 Prompt: Investigation Only
-  const investigationPrompt = `
-    You are an expert Principal Software Engineer. 
-    Analyze the following file summaries from a GitHub repository to prepare for writing high-quality documentation.
+  // Initialize empty context
+  const currentContext: RepoContext = {
+    summary: "",
+    techStack: [],
+    entryPoints: [],
+    keyModules: [],
+    workflows: [],
+    artifacts: {
+      projectOverview: "",
+      gettingStarted: "",
+      architecture: "",
+      commonTasks: "",
+    },
+    benchmarks: []
+  };
+
+  const systemPrompt = `
+    You are a Principal Software Architect conducting a deep-dive audit of a codebase.
     
-    Goal: Deeply understand the business logic, architecture, and developer workflows.
-    
-    Files provided:
+    GOAL:
+    Analyze the provided source code to build a comprehensive mental model of the system.
+    You must populate the system report progressively using the provided tools.
+
+    FILES PROVIDED:
     ${filesContext}
+
+    INSTRUCTIONS:
+    1. **Iterative Discovery**: Do not try to do everything at once. Analyze one aspect, then call the relevant tool to save it.
+    2. **Deep Dive**: When analyzing architecture, look for data flow, state management patterns, and external integrations.
+    3. **Strict Grounding**: 
+       - Do NOT hallucinate features not present in the code. 
+       - If a file mentions a config but the config file isn't present, note it as "inferred".
     
-    PHASE 1 INSTRUCTIONS:
-    1. You are in 'INVESTIGATION MODE'. 
-    2. Do NOT output the final JSON yet. Do NOT output markdown.
-    3. Use the 'report_progress' tool to describe your analysis steps (e.g., "Scanning file relationships", "Extracting key workflows").
-    4. You MUST call 'report_progress' at least 3-4 times to inform the user of your thinking process.
-    5. When you have sufficient understanding of the codebase, call the 'signal_ready_for_synthesis' tool.
+    REQUIRED STEPS (Call these tools in any logical order, but ALL must be called):
+    - \`commit_overview\`: High-level summary and tech stack.
+    - \`commit_architecture\`: Modules, entry points, and responsibilities.
+    - \`commit_workflows\`: Critical user journeys (e.g., "User logs in -> Token stored -> Dashboard fetches data").
+    - \`commit_artifacts\`: Draft the raw documentation content based on findings.
+    - \`commit_benchmarks\`: Generate QA verification questions.
+
+    CRITICAL RULE FOR BENCHMARKS:
+    - You MUST avoid generic questions like "How does the code work?".
+    - Questions MUST reference specific file names, variable names, or specific logic pathways found in the provided text.
+    - Bad: "What database is used?"
+    - Good: "In db.ts, how does the connection pool handle timeouts during high load?"
+    - If you hallucinate functionality in benchmarks, the audit will fail.
   `;
 
-  const progressTool: FunctionDeclaration = {
-    name: "report_progress",
-    description: "Report analysis progress to the user.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        status: { type: Type.STRING, description: "Current activity log message (e.g. 'Analyzing Auth Logic')." },
-        progress: { type: Type.INTEGER, description: "Percentage complete (0-90)." }
-      },
-      required: ["status", "progress"]
-    }
-  };
+  // --- TOOLS DEFINITION ---
 
-  const readyTool: FunctionDeclaration = {
-    name: "signal_ready_for_synthesis",
-    description: "Signal that you have finished analysis and are ready to generate the JSON report.",
-    parameters: {
-      type: Type.OBJECT,
-      properties: {
-        summary: { type: Type.STRING, description: "Brief confirmation." }
-      }
-    }
-  };
-
-  const schema: Schema = {
-    type: Type.OBJECT,
-    properties: {
-      summary: { type: Type.STRING },
-      techStack: { type: Type.ARRAY, items: { type: Type.STRING } },
-      entryPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
-      keyModules: { 
-        type: Type.ARRAY, 
-        items: { 
-          type: Type.OBJECT, 
-          properties: { 
-            name: { type: Type.STRING }, 
-            responsibility: { type: Type.STRING } 
-          } 
-        } 
-      },
-      workflows: { type: Type.ARRAY, items: { type: Type.STRING } },
-      artifacts: {
+  const tools: FunctionDeclaration[] = [
+    {
+      name: "commit_overview",
+      description: "Save the Executive Summary and Tech Stack identification.",
+      parameters: {
         type: Type.OBJECT,
         properties: {
-          projectOverview: { type: Type.STRING },
-          gettingStarted: { type: Type.STRING },
-          architecture: { type: Type.STRING },
-          commonTasks: { type: Type.STRING },
-        }
-      },
-      benchmarks: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            question: { type: Type.STRING },
-            answer: { type: Type.STRING }
-          }
-        }
+          summary: { type: Type.STRING, description: "2-3 sentences describing the business value and technical nature of the repo." },
+          techStack: { type: Type.ARRAY, items: { type: Type.STRING }, description: "List of languages, frameworks, and key libraries detected." }
+        },
+        required: ["summary", "techStack"]
       }
     },
-    required: ["summary", "techStack", "artifacts", "benchmarks"]
-  };
+    {
+      name: "commit_architecture",
+      description: "Save the architectural modules and entry points.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          entryPoints: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Main files that start the application." },
+          keyModules: { 
+            type: Type.ARRAY, 
+            items: { 
+              type: Type.OBJECT, 
+              properties: { 
+                name: { type: Type.STRING }, 
+                responsibility: { type: Type.STRING } 
+              } 
+            },
+            description: "List of 4-8 core functional modules/folders and what they do."
+          }
+        },
+        required: ["entryPoints", "keyModules"]
+      }
+    },
+    {
+      name: "commit_workflows",
+      description: "Save the primary user journeys or data flows.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          workflows: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Step-by-step descriptions of key operations." }
+        },
+        required: ["workflows"]
+      }
+    },
+    {
+      name: "commit_artifacts",
+      description: "Save the drafted documentation artifacts.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          projectOverview: { type: Type.STRING, description: "Detailed markdown for the Project Overview section." },
+          gettingStarted: { type: Type.STRING, description: "Detailed markdown for Installation/Setup." },
+          architecture: { type: Type.STRING, description: "Detailed markdown for Architecture concepts." },
+          commonTasks: { type: Type.STRING, description: "Detailed markdown for Common usage tasks." }
+        },
+        required: ["projectOverview", "gettingStarted", "architecture", "commonTasks"]
+      }
+    },
+    {
+      name: "commit_benchmarks",
+      description: "Save 3-5 specific, code-grounded QA questions to verify context understanding.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          benchmarks: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                question: { type: Type.STRING, description: "A specific question about a specific file or function." },
+                answer: { type: Type.STRING, description: "The correct answer based on the code analysis." }
+              }
+            }
+          }
+        },
+        required: ["benchmarks"]
+      }
+    },
+    {
+      name: "signal_complete",
+      description: "Signal that all data has been analyzed and committed.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          completion_message: { type: Type.STRING }
+        }
+      }
+    }
+  ];
 
   try {
-    // --- Phase 1: Investigation Loop (No Schema, Tools Enabled) ---
-    let messages: any[] = [{ role: 'user', parts: [{ text: investigationPrompt }] }];
-    let readyForSynthesis = false;
+    let messages: any[] = [{ role: 'user', parts: [{ text: systemPrompt }] }];
+    let isComplete = false;
+    
+    // We allow up to 15 turns for deep analysis
+    for (let turn = 0; turn < 15; turn++) {
+      if (isComplete) break;
 
-    // We loop to handle tool calls.
-    // We do NOT set responseSchema here to allow the model to use tools freely.
-    for (let turn = 0; turn < 12; turn++) {
       const response = await ai.models.generateContent({
         model: ANALYSIS_MODEL,
         contents: messages,
         config: {
-          tools: [{ functionDeclarations: [progressTool, readyTool] }],
+          tools: [{ functionDeclarations: tools }],
+          temperature: 0.2, // Lower temperature for more factual extraction
         }
       });
 
@@ -124,78 +184,70 @@ export const analyzeRepo = async (
         const toolParts: any[] = [];
         
         for (const call of functionCalls) {
-          if (call.name === "report_progress") {
-             const { status, progress } = call.args as any;
-             if (onProgress) onProgress(status, progress);
-             
-             toolParts.push({
-               functionResponse: {
-                 name: call.name,
-                 id: call.id,
-                 response: { result: "ok" }
-               }
-             });
-          } else if (call.name === "signal_ready_for_synthesis") {
-             readyForSynthesis = true;
-             toolParts.push({
-               functionResponse: {
-                 name: call.name,
-                 id: call.id,
-                 response: { result: "ready" }
-               }
-             });
+          const args = call.args as any;
+          let toolResult = "ok";
+          let statusUpdate = "";
+          let progressUpdate = 0;
+
+          // Process specific tools and update state
+          if (call.name === "commit_overview") {
+             currentContext.summary = args.summary;
+             currentContext.techStack = args.techStack;
+             statusUpdate = "Identified Tech Stack & Summary";
+             progressUpdate = 20;
+          } 
+          else if (call.name === "commit_architecture") {
+             currentContext.entryPoints = args.entryPoints;
+             currentContext.keyModules = args.keyModules;
+             statusUpdate = "Mapped Architecture & Modules";
+             progressUpdate = 40;
           }
+          else if (call.name === "commit_workflows") {
+             currentContext.workflows = args.workflows;
+             statusUpdate = "Traced User Journeys";
+             progressUpdate = 60;
+          }
+          else if (call.name === "commit_artifacts") {
+             currentContext.artifacts = args;
+             statusUpdate = "Drafted Documentation Artifacts";
+             progressUpdate = 80;
+          }
+          else if (call.name === "commit_benchmarks") {
+             currentContext.benchmarks = args.benchmarks;
+             statusUpdate = "Verified Context with QA";
+             progressUpdate = 95;
+          }
+          else if (call.name === "signal_complete") {
+             isComplete = true;
+             statusUpdate = "Analysis Finalized";
+             progressUpdate = 100;
+          }
+
+          if (onProgress && statusUpdate) {
+            onProgress(statusUpdate, progressUpdate);
+          }
+
+          // Emit partial update to UI
+          if (onPartialUpdate) {
+            onPartialUpdate({ ...currentContext });
+          }
+
+          toolParts.push({
+            functionResponse: {
+              name: call.name,
+              id: call.id,
+              response: { result: toolResult }
+            }
+          });
         }
 
         if (toolParts.length > 0) {
           messages.push({ role: 'user', parts: toolParts });
         }
-
-        if (readyForSynthesis) break;
-      } else {
-        // If the model talks without calling tools, we just nudge it back or ignore.
-        // But usually it follows instructions.
-        if (readyForSynthesis) break;
-      }
+      } 
     }
 
-    // --- Phase 2: Synthesis (Schema Enabled, No Tools) ---
-    if (onProgress) onProgress("Synthesizing final JSON report structure...", 95);
-
-    // We append a final instruction to force the JSON output.
-    messages.push({ 
-      role: 'user', 
-      parts: [{ text: "PHASE 2: Generate the final JSON object now based on your analysis. Adhere strictly to the schema." }] 
-    });
-
-    const finalResponse = await ai.models.generateContent({
-      model: ANALYSIS_MODEL,
-      contents: messages,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: schema,
-      }
-    });
-
-    const finalJsonText = finalResponse.text;
-    if (!finalJsonText) throw new Error("Gemini did not return a final JSON response.");
-    
-    const parsed = JSON.parse(finalJsonText);
-    
-    return {
-      summary: parsed.summary || "No summary available",
-      techStack: parsed.techStack || [],
-      entryPoints: parsed.entryPoints || [],
-      keyModules: parsed.keyModules || [],
-      workflows: parsed.workflows || [],
-      artifacts: parsed.artifacts || {
-        projectOverview: "",
-        gettingStarted: "",
-        architecture: "",
-        commonTasks: ""
-      },
-      benchmarks: parsed.benchmarks || []
-    };
+    return currentContext;
   } catch (error) {
     console.error("Gemini Analysis Error:", error);
     throw error;

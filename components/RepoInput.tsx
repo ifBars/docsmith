@@ -89,7 +89,7 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
         </div>
 
         <div className="mt-8 flex justify-center gap-8 text-xs font-mono text-zinc-600">
-           <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> REACT 19 COMPATIBLE</span>
+           <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> CLEAR DOCUMENTATION</span>
            <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> GEMINI 3 PRO</span>
            <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> MARKDOWN OUTPUT</span>
         </div>
