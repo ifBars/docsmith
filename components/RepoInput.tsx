@@ -21,6 +21,147 @@ interface RepoInputProps {
   loadingState: LoadingState | null;
 }
 
+// Visual Effect Component
+const CircuitBackground = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mouseRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let w = canvas.width = window.innerWidth;
+    let h = canvas.height = window.innerHeight;
+
+    const gridSize = 40;
+    
+    // Data Packets
+    interface Packet {
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      life: number;
+      maxLife: number;
+      color: string;
+      size: number;
+    }
+    const packets: Packet[] = [];
+
+    const spawnPacket = () => {
+       const cols = Math.ceil(w / gridSize);
+       const rows = Math.ceil(h / gridSize);
+       const isHoriz = Math.random() > 0.5;
+       const isAmber = Math.random() > 0.8;
+       const color = isAmber ? 'rgba(245, 158, 11, 0.8)' : 'rgba(113, 113, 122, 0.4)'; // Amber or Zinc
+       
+       if (isHoriz) {
+         packets.push({
+           x: 0,
+           y: Math.floor(Math.random() * rows) * gridSize,
+           vx: 3 + Math.random() * 2,
+           vy: 0,
+           life: 0,
+           maxLife: w + 100,
+           color,
+           size: isAmber ? 2 : 1.5
+         });
+       } else {
+         packets.push({
+           x: Math.floor(Math.random() * cols) * gridSize,
+           y: 0,
+           vx: 0,
+           vy: 3 + Math.random() * 2,
+           life: 0,
+           maxLife: h + 100,
+           color,
+           size: isAmber ? 2 : 1.5
+         });
+       }
+    };
+
+    const animate = () => {
+      ctx.clearRect(0, 0, w, h);
+      
+      // Calculate mouse grid pos
+      const mx = mouseRef.current.x;
+      const my = mouseRef.current.y;
+
+      // Draw Grid
+      ctx.lineWidth = 1;
+      
+      // Vertical Lines
+      for(let x = 0; x <= w; x += gridSize) {
+         const dist = Math.abs(x - mx);
+         const opacity = Math.max(0.05, 0.5 - (dist / 800)); // Highlight near mouse
+         ctx.strokeStyle = `rgba(39, 39, 42, ${opacity})`;
+         ctx.beginPath();
+         ctx.moveTo(x, 0); ctx.lineTo(x, h);
+         ctx.stroke();
+      }
+      
+      // Horizontal Lines
+      for(let y = 0; y <= h; y += gridSize) {
+         const dist = Math.abs(y - my);
+         const opacity = Math.max(0.05, 0.5 - (dist / 800)); // Highlight near mouse
+         ctx.strokeStyle = `rgba(39, 39, 42, ${opacity})`;
+         ctx.beginPath();
+         ctx.moveTo(0, y); ctx.lineTo(w, y);
+         ctx.stroke();
+      }
+
+      // Spawn packets randomly
+      if (Math.random() > 0.95) spawnPacket();
+
+      // Update & Draw Packets
+      for(let i = packets.length - 1; i >= 0; i--) {
+        const p = packets[i];
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life += Math.abs(p.vx) + Math.abs(p.vy);
+
+        ctx.fillStyle = p.color;
+        
+        // Glow effect
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = 4;
+        
+        ctx.fillRect(p.x - p.size, p.y - p.size, p.size * 2, p.size * 2);
+        
+        ctx.shadowBlur = 0; // Reset
+
+        if (p.life > p.maxLife) packets.splice(i, 1);
+      }
+      
+      requestAnimationFrame(animate);
+    };
+    
+    const animId = requestAnimationFrame(animate);
+    
+    const handleResize = () => {
+        w = canvas.width = window.innerWidth;
+        h = canvas.height = window.innerHeight;
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+        mouseRef.current = { x: e.clientX, y: e.clientY };
+    }
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('mousemove', handleMouseMove);
+    
+    return () => {
+        cancelAnimationFrame(animId);
+        window.removeEventListener('resize', handleResize);
+        window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
+  return <canvas ref={canvasRef} className="absolute inset-0 z-0 pointer-events-none" />;
+};
+
 export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState }) => {
   const [url, setUrl] = useState('');
   const logContainerRef = useRef<HTMLDivElement>(null);
@@ -48,10 +189,12 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
 
   return (
     <div className="h-full flex flex-col items-center justify-center bg-zinc-950 relative overflow-hidden">
-      {/* Background Grid Pattern */}
-      <div className="absolute inset-0 z-0 opacity-[0.03]" 
-           style={{ backgroundImage: 'linear-gradient(#fff 1px, transparent 1px), linear-gradient(90deg, #fff 1px, transparent 1px)', backgroundSize: '40px 40px' }}>
-      </div>
+      
+      {/* Animated Circuit Background */}
+      <CircuitBackground />
+      
+      {/* Radial Vignette for depth */}
+      <div className="absolute inset-0 z-0 pointer-events-none bg-[radial-gradient(circle_at_center,transparent_0%,#09090b_90%)]"></div>
 
       <div className="z-10 w-full max-w-2xl px-6">
         <div className="mb-12 text-center">
@@ -59,7 +202,7 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
             DOC<span className="text-zinc-600">SMITH</span>
           </h1>
           <p className="font-mono text-zinc-500 text-sm tracking-wide">
-            AUTOMATED DOCUMENTATION INFRASTRUCTURE
+            A documentation workflow that feels like Cursor
           </p>
         </div>
 

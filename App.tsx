@@ -233,7 +233,7 @@ const App: React.FC = () => {
               {repoContext && <span className="opacity-75">REPO CONNECTED</span>}
             </div>
             <div>
-              v1.2.0 (MULTI-FILE SUPPORT)
+              Made by: IfBars
             </div>
           </div>
         )}
