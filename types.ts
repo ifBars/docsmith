@@ -52,16 +52,38 @@ export interface RepoContext {
   referenceRepos: ReferenceRepo[];
 }
 
+export interface Revision {
+  id: string;
+  timestamp: number;
+  content: string;
+  reason: string; // "User edit" or "AI: refined tone"
+  author: 'USER' | 'AI';
+}
+
+export interface SectionProposal {
+  id: string;
+  suggestedContent: string;
+  reason: string;
+  type: 'refinement' | 'expansion' | 'rewrite' | 'correction';
+}
+
 export interface Section {
   id: string;
   title: string;
   description: string; // Prompt hint for the AI
   content?: string; // The generated markdown
   isDrafted: boolean;
+  
+  // History & Revision Control
+  revisions: Revision[];
+  
+  // Collaborative Editing
+  proposal?: SectionProposal;
+
   // Audit & Review State
-  suggestion?: string; // AI proposed content improvement
-  suggestionReason?: string; // Why the AI thinks this should be changed
-  isAuditing?: boolean; // Is currently being checked
+  suggestion?: string; // Legacy field for audit, mapped to proposal now
+  suggestionReason?: string; // Legacy field
+  isAuditing?: boolean; 
   lastRefinedWithBenchmarks?: boolean;
 }
 

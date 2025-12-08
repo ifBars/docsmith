@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { DocFramework, RepoContext, Section, DocFile } from '../types';
+import * as Diff from 'diff';
+import { DocFramework, RepoContext, Section, DocFile, Revision } from '../types';
 import { Button } from './ui/Button';
-import { ArrowLeft, Play, Download, Copy, FileText, PanelRightClose, PanelRightOpen, RefreshCw, Folder, AlignLeft, Split, Eye, Edit2, Send, Wand2, ShieldCheck, AlertCircle, Check, X, Database, Loader2 } from 'lucide-react';
-import { draftSectionContent, refineContent, generateDocOutline, auditSectionContent } from '../services/geminiService';
+import { ArrowLeft, Play, Download, Copy, FileText, PanelRightClose, PanelRightOpen, RefreshCw, Folder, AlignLeft, Split, Eye, Edit2, Send, Wand2, ShieldCheck, AlertCircle, Check, X, Database, Loader2, History, GitCommit, Bot, User, Trash2, Undo2 } from 'lucide-react';
+import { draftSectionContent, proposeRefinement, generateDocOutline, auditSectionContent } from '../services/geminiService';
 
 interface DocEditorProps {
   framework: DocFramework;
@@ -14,7 +15,26 @@ interface DocEditorProps {
   onBack: () => void;
 }
 
-type ViewMode = 'edit' | 'split' | 'preview';
+type ViewMode = 'edit' | 'split' | 'preview' | 'diff';
+
+// --- Diff Logic Component ---
+const DiffViewer = ({ oldText, newText }: { oldText: string, newText: string }) => {
+  const diff = Diff.diffLines(oldText, newText);
+
+  return (
+    <div className="font-mono text-sm leading-6 whitespace-pre-wrap">
+      {diff.map((part, index) => {
+        const color = part.added ? 'bg-green-900/30 text-green-200' : part.removed ? 'bg-red-900/30 text-red-300' : 'text-zinc-400';
+        const prefix = part.added ? '+ ' : part.removed ? '- ' : '  ';
+        return (
+          <span key={index} className={`block ${color} px-4 border-l-2 ${part.added ? 'border-green-700' : part.removed ? 'border-red-700' : 'border-transparent'}`}>
+            {part.value.replace(/\n$/, '')} 
+          </span>
+        )
+      })}
+    </div>
+  );
+};
 
 // Custom Markdown Components for "World Class" Rendering
 const MarkdownComponents = {
@@ -85,14 +105,28 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
   const [activeSectionId, setActiveSectionId] = useState<string>('');
   const [isDrafting, setIsDrafting] = useState(false);
   const [isAuditing, setIsAuditing] = useState(false);
-  const [showAssistant, setShowAssistant] = useState(true);
+  const [showCopilot, setShowCopilot] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<'files' | 'outline'>('files');
   const [viewMode, setViewMode] = useState<ViewMode>('split');
-  const [customRefinement, setCustomRefinement] = useState('');
   const [draftingLog, setDraftingLog] = useState<string>('');
+  
+  // Chat State
+  const [chatMessages, setChatMessages] = useState<Array<{role: 'user' | 'ai', text: string}>>([
+    { role: 'ai', text: "I'm your documentation copilot. Select a section and tell me how I can help improve it." }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // History Modal State
+  const [showHistory, setShowHistory] = useState(false);
 
   const activeFile = files.find(f => f.id === activeFileId);
   const activeSection = activeFile?.sections.find(s => s.id === activeSectionId);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   // Load outline when entering a file
   useEffect(() => {
@@ -143,7 +177,18 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
     const content = await draftSectionContent(section, activeFile.path, context, (log) => setDraftingLog(log));
     
     const newSections = [...activeFile.sections];
-    newSections[idx] = { ...section, content, isDrafted: true };
+    newSections[idx] = { 
+        ...section, 
+        content, 
+        isDrafted: true,
+        revisions: [{ 
+            id: Date.now().toString(), 
+            timestamp: Date.now(), 
+            content, 
+            author: 'AI', 
+            reason: 'Initial Draft' 
+        }] 
+    };
     
     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
     setIsDrafting(false);
@@ -157,17 +202,80 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSectionId]);
 
-  const handleRefine = async (instruction: string) => {
+  // --- Collaborative Workflow ---
+
+  const handleCopilotRequest = async (instruction: string) => {
     if (!activeSection?.content || !activeFile) return;
-    setIsDrafting(true);
-    setDraftingLog("Refining content...");
-    const newContent = await refineContent(activeSection.content, instruction);
+    if (!instruction.trim()) return;
+
+    // Add user message
+    setChatMessages(prev => [...prev, { role: 'user', text: instruction }]);
+    setChatInput('');
     
-    const newSections = activeFile.sections.map(s => s.id === activeSectionId ? { ...s, content: newContent } : s);
+    setIsDrafting(true);
+    setDraftingLog("Thinking...");
+    
+    try {
+        const proposal = await proposeRefinement(activeSection.content, instruction, activeFile.path, activeSection.title);
+        
+        // Update section with proposal
+        const newSections = activeFile.sections.map(s => 
+            s.id === activeSectionId 
+            ? { ...s, proposal } 
+            : s
+        );
+        setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+        
+        // Add AI response
+        setChatMessages(prev => [...prev, { role: 'ai', text: `I've proposed a change: ${proposal.reason}. Please review the diff.` }]);
+        setViewMode('diff');
+        
+    } catch (e) {
+        setChatMessages(prev => [...prev, { role: 'ai', text: "I encountered an error trying to process that request." }]);
+    } finally {
+        setIsDrafting(false);
+        setDraftingLog("");
+    }
+  };
+
+  const acceptProposal = () => {
+    if (!activeFile || !activeSection || !activeSection.proposal) return;
+
+    const newRevision: Revision = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        content: activeSection.proposal.suggestedContent,
+        author: 'AI',
+        reason: activeSection.proposal.reason
+    };
+
+    const newSections = activeFile.sections.map(s => 
+        s.id === activeSectionId 
+        ? { 
+            ...s, 
+            content: s.proposal!.suggestedContent, 
+            proposal: undefined,
+            revisions: [newRevision, ...s.revisions]
+          } 
+        : s
+    );
+    
     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
-    setIsDrafting(false);
-    setDraftingLog("");
-    setCustomRefinement('');
+    setViewMode('edit');
+    setChatMessages(prev => [...prev, { role: 'ai', text: "Changes applied successfully." }]);
+  };
+
+  const rejectProposal = () => {
+    if (!activeFile || !activeSection) return;
+
+    const newSections = activeFile.sections.map(s => 
+        s.id === activeSectionId 
+        ? { ...s, proposal: undefined } 
+        : s
+    );
+    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+    setViewMode('edit');
+    setChatMessages(prev => [...prev, { role: 'ai', text: "Proposal discarded." }]);
   };
 
   const handleAuditSection = async () => {
@@ -177,43 +285,49 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
     
     const result = await auditSectionContent(activeSection, activeFile.path, context);
     if (result.hasIssues && result.suggestion) {
-      const newSections = activeFile.sections.map(s => 
-         s.id === activeSectionId 
-         ? {
-            ...s,
-            suggestion: result.suggestion,
-            suggestionReason: result.reason,
-            lastRefinedWithBenchmarks: false
-         } 
-         : s
-      );
-      setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+        // Map old audit format to new proposal format
+        const proposal = {
+            id: Date.now().toString(),
+            suggestedContent: result.suggestion,
+            reason: result.reason || "Audit findings",
+            type: 'correction' as const
+        };
+
+        const newSections = activeFile.sections.map(s => 
+            s.id === activeSectionId 
+            ? { ...s, proposal } 
+            : s
+        );
+        setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+        setChatMessages(prev => [...prev, { role: 'ai', text: `Audit complete. I found issues: ${result.reason}. Review the proposed fix.` }]);
+        setViewMode('diff');
+    } else {
+        setChatMessages(prev => [...prev, { role: 'ai', text: "Audit passed. Content looks good." }]);
     }
     
     setIsAuditing(false);
     setDraftingLog("");
   };
 
-  const handleAcceptSuggestion = () => {
-     if (!activeFile || !activeSection || !activeSection.suggestion) return;
-     
-     const newSections = activeFile.sections.map(s => 
-       s.id === activeSectionId 
-       ? { ...s, content: s.suggestion, suggestion: undefined, suggestionReason: undefined, lastRefinedWithBenchmarks: false } 
-       : s
-     );
-     setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
-  };
+  const handleRestoreRevision = (rev: Revision) => {
+      if (!activeFile || !activeSection) return;
+      
+      const restoreRev: Revision = {
+          id: Date.now().toString(),
+          timestamp: Date.now(),
+          content: rev.content,
+          author: 'USER',
+          reason: `Restored to version from ${new Date(rev.timestamp).toLocaleTimeString()}`
+      };
 
-  const handleRejectSuggestion = () => {
-    if (!activeFile || !activeSection) return;
-    
-    const newSections = activeFile.sections.map(s => 
-      s.id === activeSectionId 
-      ? { ...s, suggestion: undefined, suggestionReason: undefined } 
-      : s
-    );
-    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+      const newSections = activeFile.sections.map(s => 
+        s.id === activeSectionId 
+        ? { ...s, content: rev.content, revisions: [restoreRev, ...s.revisions] } 
+        : s
+      );
+      setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+      setShowHistory(false);
+      setChatMessages(prev => [...prev, { role: 'ai', text: "Restored previous version." }]);
   };
 
   const getFullMarkdown = (file: DocFile) => {
@@ -234,14 +348,32 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
 
   const updateActiveSectionContent = (text: string) => {
       if (!activeFile) return;
+      // We don't save every keystroke to revisions history, only manual saves or big AI events
+      // But we update current state
       const newSections = activeFile.sections.map(s => s.id === activeSectionId ? { ...s, content: text } : s);
       setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
   };
 
+  const saveManualEdit = () => {
+    if (!activeFile || !activeSection) return;
+    const newRevision: Revision = {
+        id: Date.now().toString(),
+        timestamp: Date.now(),
+        content: activeSection.content || '',
+        author: 'USER',
+        reason: 'Manual Edit'
+    };
+    const newSections = activeFile.sections.map(s => 
+        s.id === activeSectionId ? { ...s, revisions: [newRevision, ...s.revisions] } : s
+    );
+    setFiles(prev => prev.map(f => f.id === activeFileId ? { ...f, sections: newSections } : f));
+  }
+
   return (
-    <div className="h-full flex flex-col bg-zinc-950 text-zinc-300 font-mono text-sm">
+    <div className="h-full flex flex-col bg-zinc-950 text-zinc-300 font-mono text-sm relative">
+      
       {/* Tool Bar */}
-      <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-4 bg-zinc-900 select-none">
+      <div className="h-14 border-b border-zinc-800 flex items-center justify-between px-4 bg-zinc-900 select-none flex-shrink-0">
         <div className="flex items-center gap-4">
           <button onClick={onBack} className="text-zinc-500 hover:text-white transition-colors">
             <ArrowLeft className="w-4 h-4" />
@@ -260,10 +392,19 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
             onClick={handleAuditSection} 
             loading={isAuditing}
             disabled={!activeFile || isAuditing || !activeSection?.content}
-            className={activeSection?.suggestion ? "border-amber-500 text-amber-500" : ""}
             icon={<ShieldCheck className="w-3 h-3"/>}
           >
-            {isAuditing ? 'AUDITING...' : 'AUDIT SECTION'}
+            {isAuditing ? 'AUDITING...' : 'AUDIT'}
+          </Button>
+          
+          <Button
+             variant="ghost"
+             size="sm"
+             onClick={() => setShowHistory(!showHistory)}
+             icon={<History className="w-3 h-3" />}
+             className={showHistory ? 'text-white bg-zinc-800' : ''}
+          >
+             HISTORY
           </Button>
 
           <div className="h-4 w-px bg-zinc-800 mx-1"></div>
@@ -273,19 +414,20 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
              <button title="Editor Only" onClick={() => setViewMode('edit')} className={`p-1.5 rounded-sm transition-colors ${viewMode === 'edit' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><Edit2 className="w-3 h-3" /></button>
              <button title="Split View" onClick={() => setViewMode('split')} className={`p-1.5 rounded-sm transition-colors ${viewMode === 'split' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><Split className="w-3 h-3" /></button>
              <button title="Preview Only" onClick={() => setViewMode('preview')} className={`p-1.5 rounded-sm transition-colors ${viewMode === 'preview' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><Eye className="w-3 h-3" /></button>
+             <button title="Diff View" onClick={() => setViewMode('diff')} className={`p-1.5 rounded-sm transition-colors ${viewMode === 'diff' ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}><GitCommit className="w-3 h-3" /></button>
           </div>
 
           <Button variant="secondary" size="sm" onClick={() => activeFile && navigator.clipboard.writeText(getFullMarkdown(activeFile))} icon={<Copy className="w-3 h-3"/>}>
             COPY
           </Button>
           <Button variant="primary" size="sm" onClick={handleDownload} icon={<Download className="w-3 h-3"/>}>
-            EXPORT .MD
+            EXPORT
           </Button>
           <button 
-            onClick={() => setShowAssistant(!showAssistant)} 
-            className={`ml-2 p-1.5 rounded-sm hover:bg-zinc-800 transition-colors ${showAssistant ? 'text-accent bg-zinc-800' : 'text-zinc-500'}`}
+            onClick={() => setShowCopilot(!showCopilot)} 
+            className={`ml-2 p-1.5 rounded-sm hover:bg-zinc-800 transition-colors ${showCopilot ? 'text-accent bg-zinc-800' : 'text-zinc-500'}`}
           >
-            {showAssistant ? <PanelRightOpen className="w-4 h-4" /> : <PanelRightClose className="w-4 h-4" />}
+            {showCopilot ? <PanelRightOpen className="w-4 h-4" /> : <PanelRightClose className="w-4 h-4" />}
           </button>
         </div>
       </div>
@@ -312,7 +454,6 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
             {sidebarTab === 'files' ? (
                 <div>
                     {files.map((file) => {
-                      const suggestionsCount = file.sections.filter(s => s.suggestion).length;
                       return (
                         <button
                             key={file.id}
@@ -330,11 +471,6 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
                                   <FileText className="w-3 h-3 flex-shrink-0" />
                                   <span className="truncate font-bold">{file.path}</span>
                                 </div>
-                                {suggestionsCount > 0 && (
-                                  <span className="flex items-center justify-center h-4 min-w-[16px] px-1 bg-amber-500/20 text-amber-500 text-[9px] rounded-full">
-                                    {suggestionsCount}
-                                  </span>
-                                )}
                             </div>
                             <span className="pl-5 opacity-50 truncate text-[10px]">
                                 {file.sections.length > 0 ? `${file.sections.length} sections` : 'Pending Analysis'}
@@ -359,8 +495,8 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
                                 >
                                     <span className="font-mono opacity-50 w-4 text-[10px]">{idx + 1}</span>
                                     <span className="truncate flex-1">{section.title}</span>
-                                    {section.suggestion ? (
-                                      <AlertCircle className="w-3 h-3 text-amber-500 flex-shrink-0" />
+                                    {section.proposal ? (
+                                      <GitCommit className="w-3 h-3 text-amber-500 flex-shrink-0 animate-pulse" />
                                     ) : section.isDrafted ? (
                                       <div className="w-1.5 h-1.5 rounded-full bg-accent border-none shadow-[0_0_5px_rgba(245,158,11,0.5)]"></div>
                                     ) : (
@@ -390,6 +526,37 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
 
         {/* Pane 2: Editor (Main) */}
         <main className="flex-1 flex min-w-0 bg-[#0d0d0d] relative">
+          
+          {/* Revisions History Overlay */}
+          {showHistory && activeSection && (
+              <div className="absolute top-0 right-0 h-full w-80 bg-zinc-900 border-l border-zinc-800 z-30 shadow-2xl overflow-y-auto animate-in slide-in-from-right-10">
+                 <div className="p-4 border-b border-zinc-800 flex justify-between items-center">
+                    <span className="font-mono text-xs uppercase text-zinc-400">Version History</span>
+                    <button onClick={() => setShowHistory(false)}><X className="w-4 h-4 text-zinc-500" /></button>
+                 </div>
+                 <div className="divide-y divide-zinc-800">
+                    {activeSection.revisions.length === 0 ? (
+                        <div className="p-4 text-zinc-600 text-xs italic">No previous versions</div>
+                    ) : (
+                        activeSection.revisions.map((rev) => (
+                            <div key={rev.id} className="p-4 hover:bg-zinc-800/50 group">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${rev.author === 'AI' ? 'bg-amber-500/10 text-amber-500' : 'bg-blue-500/10 text-blue-400'}`}>
+                                        {rev.author}
+                                    </span>
+                                    <span className="text-[10px] text-zinc-500 font-mono">{new Date(rev.timestamp).toLocaleTimeString()}</span>
+                                </div>
+                                <p className="text-xs text-zinc-300 mb-2">{rev.reason}</p>
+                                <Button size="sm" variant="secondary" onClick={() => handleRestoreRevision(rev)} icon={<Undo2 className="w-3 h-3"/>} className="w-full opacity-0 group-hover:opacity-100 transition-opacity">
+                                    Restore
+                                </Button>
+                            </div>
+                        ))
+                    )}
+                 </div>
+              </div>
+          )}
+
           {activeSection ? (
             <>
               {isDrafting && (
@@ -398,66 +565,75 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
                 </div>
               )}
               
-              {/* Editor Pane */}
-              {(viewMode === 'edit' || viewMode === 'split') && (
-                  <div className={`flex-1 overflow-y-auto border-r border-zinc-900 flex flex-col ${viewMode === 'split' ? 'w-1/2' : 'w-full'}`}>
-                    
-                    {/* Suggestion Card */}
-                    {activeSection.suggestion && (
-                       <div className="bg-amber-950/20 border-b border-amber-900/50 p-4 animate-in slide-in-from-top-2">
-                          <div className="flex items-start gap-3">
-                             <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
-                             <div className="flex-1">
-                                <h4 className="text-xs font-bold uppercase tracking-wide mb-1 text-amber-500">
-                                    Audit Suggestion
-                                </h4>
-                                <p className="text-xs mb-3 leading-relaxed text-amber-200/80">{activeSection.suggestionReason}</p>
-                                
-                                <div className="bg-black/30 rounded p-3 text-xs text-zinc-400 font-mono mb-3 max-h-32 overflow-y-auto border border-amber-900/30">
-                                   <ReactMarkdown>{activeSection.suggestion}</ReactMarkdown>
-                                </div>
-
-                                <div className="flex gap-2">
-                                   <Button size="sm" variant="primary" onClick={handleAcceptSuggestion} icon={<Check className="w-3 h-3"/>}>
-                                      Apply Changes
-                                   </Button>
-                                   <Button size="sm" variant="ghost" onClick={handleRejectSuggestion} icon={<X className="w-3 h-3"/>}>
-                                      Dismiss
-                                   </Button>
-                                </div>
-                             </div>
-                          </div>
-                       </div>
+              {/* Diff Mode (Priority View if proposal exists) */}
+              {(viewMode === 'diff' || activeSection.proposal) ? (
+                 <div className="flex-1 flex flex-col h-full bg-[#0d1117]">
+                    {activeSection.proposal ? (
+                        <div className="bg-amber-950/30 border-b border-amber-900/50 p-4">
+                           <div className="flex items-start gap-4">
+                              <GitCommit className="w-5 h-5 text-amber-500 mt-1" />
+                              <div className="flex-1">
+                                 <h3 className="text-amber-500 font-bold text-sm mb-1 uppercase tracking-wide">Change Proposed</h3>
+                                 <p className="text-zinc-300 text-sm mb-4 leading-relaxed">{activeSection.proposal.reason}</p>
+                                 <div className="flex gap-3">
+                                    <Button variant="primary" onClick={acceptProposal} icon={<Check className="w-4 h-4"/>}>Accept Changes</Button>
+                                    <Button variant="secondary" onClick={rejectProposal} icon={<X className="w-4 h-4"/>}>Reject</Button>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                    ) : (
+                        <div className="p-4 bg-zinc-900 border-b border-zinc-800 text-zinc-500 text-xs uppercase tracking-wider text-center">
+                           Diff View Active
+                        </div>
                     )}
-
-                    <div className="flex-1 p-8">
-                        <textarea
-                            className="w-full h-full bg-transparent text-zinc-300 font-mono text-sm leading-7 focus:outline-none resize-none p-0 border-none placeholder-zinc-700"
-                            value={activeSection.content || ''}
-                            placeholder="// Content is being generated by AI..."
-                            spellCheck={false}
-                            onChange={(e) => updateActiveSectionContent(e.target.value)}
-                        />
+                    
+                    <div className="flex-1 overflow-auto p-4 md:p-8">
+                       <h4 className="text-zinc-600 font-mono text-xs mb-4 uppercase">Comparing Changes</h4>
+                       <div className="bg-zinc-950 border border-zinc-800 rounded-md p-4 overflow-x-auto">
+                          <DiffViewer 
+                             oldText={activeSection.content || ''} 
+                             newText={activeSection.proposal ? activeSection.proposal.suggestedContent : (activeSection.content || '')} 
+                          />
+                       </div>
                     </div>
-                  </div>
-              )}
-
-              {/* Preview Pane */}
-              {(viewMode === 'preview' || viewMode === 'split') && (
-                  <div className={`flex-1 overflow-y-auto bg-zinc-950 ${viewMode === 'split' ? 'w-1/2' : 'w-full'}`}>
-                      <div className="p-8 pb-32">
-                        <h2 className="text-zinc-500 text-xs font-mono uppercase tracking-widest border-b border-zinc-800 pb-2 mb-6">
-                            Preview: {activeSection.title}
-                        </h2>
-                        <ReactMarkdown 
-                          remarkPlugins={[remarkGfm]}
-                          rehypePlugins={[rehypeHighlight]}
-                          components={MarkdownComponents}
-                        >
-                            {activeSection.content || ''}
-                        </ReactMarkdown>
+                 </div>
+              ) : (
+                <>
+                  {/* Editor Pane */}
+                  {(viewMode === 'edit' || viewMode === 'split') && (
+                      <div className={`flex-1 overflow-y-auto border-r border-zinc-900 flex flex-col ${viewMode === 'split' ? 'w-1/2' : 'w-full'}`}>
+                        <div className="flex-1 p-8">
+                            <textarea
+                                className="w-full h-full bg-transparent text-zinc-300 font-mono text-sm leading-7 focus:outline-none resize-none p-0 border-none placeholder-zinc-700"
+                                value={activeSection.content || ''}
+                                placeholder="// Content is being generated by AI..."
+                                spellCheck={false}
+                                onChange={(e) => updateActiveSectionContent(e.target.value)}
+                                onBlur={saveManualEdit}
+                            />
+                        </div>
                       </div>
-                  </div>
+                  )}
+
+                  {/* Preview Pane */}
+                  {(viewMode === 'preview' || viewMode === 'split') && (
+                      <div className={`flex-1 overflow-y-auto bg-zinc-950 ${viewMode === 'split' ? 'w-1/2' : 'w-full'}`}>
+                          <div className="p-8 pb-32">
+                            <h2 className="text-zinc-500 text-xs font-mono uppercase tracking-widest border-b border-zinc-800 pb-2 mb-6">
+                                Preview: {activeSection.title}
+                            </h2>
+                            <ReactMarkdown 
+                              remarkPlugins={[remarkGfm]}
+                              rehypePlugins={[rehypeHighlight]}
+                              components={MarkdownComponents}
+                            >
+                                {activeSection.content || ''}
+                            </ReactMarkdown>
+                          </div>
+                      </div>
+                  )}
+                </>
               )}
             </>
           ) : (
@@ -477,84 +653,79 @@ export const DocEditor: React.FC<DocEditorProps> = ({ framework, initialFiles, c
           )}
         </main>
 
-        {/* Pane 3: Assistant (Right) */}
-        {showAssistant && (
-          <aside className="w-80 border-l border-zinc-800 bg-zinc-950 flex flex-col flex-shrink-0">
+        {/* Pane 3: Copilot Chat (Right) */}
+        {showCopilot && (
+          <aside className="w-80 border-l border-zinc-800 bg-zinc-950 flex flex-col flex-shrink-0 z-20">
             <div className="p-3 border-b border-zinc-800 text-xs font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
               <Wand2 className="w-4 h-4 text-accent" />
-              AI Copilot
+              Copilot
             </div>
             
-            <div className="p-4 space-y-6 flex-1 overflow-y-auto">
+            {/* Chat History */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {chatMessages.map((msg, i) => (
+                 <div key={i} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                    <div className={`w-6 h-6 rounded flex items-center justify-center shrink-0 ${msg.role === 'ai' ? 'bg-accent text-black' : 'bg-zinc-700 text-zinc-300'}`}>
+                       {msg.role === 'ai' ? <Bot className="w-3 h-3"/> : <User className="w-3 h-3"/>}
+                    </div>
+                    <div className={`text-xs p-3 rounded-lg max-w-[85%] leading-relaxed ${msg.role === 'ai' ? 'bg-zinc-900 text-zinc-300' : 'bg-zinc-800 text-white'}`}>
+                       {msg.text}
+                    </div>
+                 </div>
+              ))}
+              <div ref={chatEndRef} />
               
-              {draftingLog && (
-                  <div className="bg-zinc-900/50 border border-accent/20 p-3 rounded-sm flex items-center gap-2 animate-pulse">
-                     <Loader2 className="w-3 h-3 text-accent animate-spin" />
-                     <span className="text-[10px] text-accent font-mono uppercase">{draftingLog}</span>
+              {isDrafting && (
+                  <div className="flex gap-3">
+                     <div className="w-6 h-6 rounded bg-accent text-black flex items-center justify-center shrink-0">
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                     </div>
+                     <div className="text-xs p-3 rounded-lg bg-zinc-900 text-zinc-500 animate-pulse">
+                        {draftingLog}
+                     </div>
                   </div>
               )}
+            </div>
 
-              <div>
-                <label className="text-[10px] text-zinc-500 block mb-2 font-mono uppercase">RAG Context Status</label>
-                <div className="bg-zinc-900 border border-zinc-800 p-3 text-xs text-zinc-400 font-mono rounded-sm flex items-center gap-2">
-                   <Database className="w-3 h-3 text-zinc-600" />
-                   {context.vectorIndex.length > 0 ? (
-                      <span>{context.vectorIndex.length} code chunks indexed.</span>
-                   ) : (
-                      <span>Indexing pending...</span>
-                   )}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] text-zinc-500 block mb-2 font-mono uppercase">Section Context</label>
-                <div className="bg-zinc-900 border border-zinc-800 p-3 text-xs text-zinc-400 font-mono rounded-sm max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap">
-                   {activeSection?.description || "Select a section to see context."}
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[10px] text-zinc-500 block mb-2 font-mono uppercase">Refine Selection</label>
+            {/* Input Area */}
+            <div className="p-4 border-t border-zinc-900 bg-zinc-950">
+                {activeSection ? (
+                   <div className="relative">
+                      <input 
+                         className="w-full bg-zinc-900 border border-zinc-800 rounded-sm py-3 pl-4 pr-10 text-xs text-white focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent placeholder-zinc-600"
+                         placeholder="Ask for changes (e.g., 'Make it friendlier')"
+                         value={chatInput}
+                         onChange={(e) => setChatInput(e.target.value)}
+                         onKeyDown={(e) => e.key === 'Enter' && !isDrafting && handleCopilotRequest(chatInput)}
+                         disabled={isDrafting}
+                      />
+                      <button 
+                         className="absolute right-2 top-2.5 text-zinc-500 hover:text-white disabled:opacity-50"
+                         onClick={() => handleCopilotRequest(chatInput)}
+                         disabled={!chatInput || isDrafting}
+                      >
+                         <Send className="w-4 h-4" />
+                      </button>
+                   </div>
+                ) : (
+                    <div className="text-center text-xs text-zinc-600 py-2">
+                        Select a section to start chatting
+                    </div>
+                )}
                 
-                {/* Custom Input */}
-                <div className="flex gap-0 mb-3 shadow-sm">
-                   <input 
-                      type="text" 
-                      value={customRefinement}
-                      onChange={(e) => setCustomRefinement(e.target.value)}
-                      placeholder="e.g. 'Add a code example'"
-                      className="bg-zinc-900 border border-zinc-800 border-r-0 text-xs text-white p-3 w-full focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent transition-all"
-                      onKeyDown={(e) => e.key === 'Enter' && customRefinement && handleRefine(customRefinement)}
-                   />
-                   <button 
-                     disabled={!customRefinement}
-                     onClick={() => handleRefine(customRefinement)}
-                     className="bg-zinc-800 border border-zinc-700 text-zinc-300 px-3 hover:bg-accent hover:text-black hover:border-accent disabled:opacity-50 disabled:hover:bg-zinc-800 disabled:hover:text-zinc-300 transition-colors"
-                   >
-                      <Send className="w-3 h-3" />
-                   </button>
-                </div>
-
-                <div className="space-y-2">
-                   {[
-                     "Fix grammar & typos",
-                     "Make it more concise",
-                     "Add a code snippet",
-                     "Format as a list",
-                     "Make tone more professional"
-                   ].map(action => (
-                     <button
-                       key={action}
-                       onClick={() => handleRefine(action)}
-                       disabled={isDrafting || !activeSection}
-                       className="w-full text-left px-3 py-2 bg-zinc-950 border border-zinc-800 hover:border-accent/50 hover:bg-zinc-900 text-zinc-400 text-xs transition-colors rounded-sm flex items-center gap-2 group"
-                     >
-                       <Play className="w-2 h-2 text-zinc-700 group-hover:text-accent transition-colors" />
-                       {action}
-                     </button>
+                {/* Quick Actions */}
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                   {['Fix Grammar', 'Shorten', 'Add Example', 'Professional Tone'].map(action => (
+                      <button 
+                        key={action}
+                        onClick={() => handleCopilotRequest(action)}
+                        disabled={!activeSection || isDrafting}
+                        className="text-[10px] py-1.5 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 rounded-sm transition-colors text-center"
+                      >
+                         {action}
+                      </button>
                    ))}
                 </div>
-              </div>
             </div>
           </aside>
         )}

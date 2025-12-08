@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Schema, FunctionDeclaration } from "@google/genai";
-import { DocFramework, FileSummary, RepoContext, Section, DocFile, ReferenceRepo } from '../types';
+import { DocFramework, FileSummary, RepoContext, Section, DocFile, ReferenceRepo, SectionProposal } from '../types';
 import { embedChunks, retrieveContext } from './ragService';
 import { fetchRepoData } from './mockGithubService';
 
@@ -469,10 +469,10 @@ export const generateDocOutline = async (fileName: string, filePurpose: string, 
 
     const text = response.text;
     const sections = JSON.parse(text || '[]') as any[];
-    return sections.map((s: any) => ({ ...s, isDrafted: false }));
+    return sections.map((s: any) => ({ ...s, isDrafted: false, revisions: [] }));
   } catch (error) {
     return [
-      { id: '1', title: 'Introduction', description: 'Overview of the topic', isDrafted: false },
+      { id: '1', title: 'Introduction', description: 'Overview of the topic', isDrafted: false, revisions: [] },
     ];
   }
 };
@@ -591,30 +591,79 @@ export const fineTuneContentWithBenchmarks = async (
   }
 };
 
-export const refineContent = async (
-  content: string, 
-  instruction: string
-): Promise<string> => {
+// Replaces direct refineContent with a Proposal-based workflow
+export const proposeRefinement = async (
+  currentContent: string,
+  userInstruction: string,
+  fileName: string,
+  sectionTitle: string
+): Promise<SectionProposal> => {
   const prompt = `
-    You are a collaborative editor.
+    You are a Collaborative Documentation Copilot.
     
-    Original Text:
-    ${content}
+    Your goal is to assist the user by proposing edits to the documentation.
+    You MUST NOT return the full text if you are only making small changes, but the system prefers full markdown for diffing purposes.
     
-    User Request: ${instruction}
+    CONTEXT:
+    File: ${fileName}
+    Section: ${sectionTitle}
     
-    Output the rewritten markdown only. Maintain the rest of the context.
+    CURRENT CONTENT:
+    ${currentContent}
+    
+    USER INSTRUCTION:
+    ${userInstruction}
+    
+    TASK:
+    1. Analyze the user's request.
+    2. Rewrite the content to satisfy the request. 
+       - If the request is ambiguous, make a best-guess effort but explain your reasoning clearly.
+       - Preserve formatting, code blocks, and style unless asked otherwise.
+    3. Provide a short reason for your changes to help the user understand "Why".
+    
+    Output JSON.
   `;
+
+  const schema: Schema = {
+    type: Type.OBJECT,
+    properties: {
+      suggestedContent: { type: Type.STRING, description: "The full rewritten content for this section." },
+      reason: { type: Type.STRING, description: "Explanation of what changed and why." },
+      type: { type: Type.STRING, enum: ['refinement', 'expansion', 'rewrite', 'correction'] }
+    },
+    required: ["suggestedContent", "reason", "type"]
+  };
 
   try {
     const response = await ai.models.generateContent({
       model: DRAFTING_MODEL,
       contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
     });
-    return response.text || content;
+    
+    const result = JSON.parse(response.text || '{}');
+    return {
+      id: Math.random().toString(36).substring(7),
+      suggestedContent: result.suggestedContent || currentContent,
+      reason: result.reason || "AI Refinement",
+      type: result.type || 'refinement'
+    };
   } catch (error) {
-    return content;
+    console.error("Refinement Proposal Error", error);
+    throw error;
   }
+};
+
+// Legacy support wrapper if needed, but we try to use proposals now
+export const refineContent = async (
+  content: string, 
+  instruction: string
+): Promise<string> => {
+  const proposal = await proposeRefinement(content, instruction, "Draft", "Section");
+  return proposal.suggestedContent;
 };
 
 export const auditSectionContent = async (
@@ -714,7 +763,8 @@ function parseMarkdownSections(content: string): Section[] {
         title: currentTitle,
         description: `Existing content for ${currentTitle}`,
         content: text,
-        isDrafted: true
+        isDrafted: true,
+        revisions: []
       });
       currentBuffer = [];
     }
@@ -741,7 +791,8 @@ function parseMarkdownSections(content: string): Section[] {
         title: "Content",
         description: "Existing content",
         content: content,
-        isDrafted: true
+        isDrafted: true,
+        revisions: []
       });
   }
 
