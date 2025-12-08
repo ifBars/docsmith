@@ -26,7 +26,6 @@ export const fetchRepoData = async (url: string, token?: string): Promise<RepoDa
 
   const octokit = new Octokit({ 
       auth: token || undefined,
-      userAgent: 'DocSmith/1.0'
   });
 
   let defaultBranch = 'main';
@@ -38,16 +37,14 @@ export const fetchRepoData = async (url: string, token?: string): Promise<RepoDa
     defaultBranch = repoData.default_branch;
   } catch (e: any) {
     if (e.status === 404 || e.status === 403) {
-        throw new Error(`Access denied to ${owner}/${repo}. Please provide a valid token if this is a private repository.`);
+        throw new Error(`Access denied to ${owner}/${repo}. Please check the URL or provide a valid Personal Access Token if this is a private repository.`);
     }
     console.warn('Failed to fetch repo metadata, defaulting to main branch.', e);
   }
 
-  let filesToFetch: string[] = [];
+  let filesToFetch: { path: string, sha?: string }[] = [];
   
   try {
-    // Recursive tree fetch to find the best files
-    // Note: The tree API has a limit on the number of items. Large repos might be truncated.
     const { data: treeData } = await octokit.request('GET /repos/{owner}/{repo}/git/trees/{tree_sha}', {
       owner,
       repo,
@@ -56,16 +53,22 @@ export const fetchRepoData = async (url: string, token?: string): Promise<RepoDa
     });
 
     if (treeData.tree && Array.isArray(treeData.tree)) {
-      const allFiles = treeData.tree
-        .filter((node: any) => node.type === 'blob')
-        .map((node: any) => node.path);
-      filesToFetch = selectRelevantFiles(allFiles);
+      const allNodes = treeData.tree
+        .filter((node: any) => node.type === 'blob' && node.path);
+        
+      const allPaths = allNodes.map((n:any) => n.path);
+      const relevantPaths = selectRelevantFiles(allPaths);
+      
+      filesToFetch = relevantPaths.map(p => {
+          const node = allNodes.find((n:any) => n.path === p);
+          return { path: p, sha: node?.sha };
+      });
     } else {
-      filesToFetch = COMMON_FILES;
+      filesToFetch = COMMON_FILES.map(p => ({ path: p }));
     }
   } catch (e) {
     console.warn('Tree fetch failed, falling back to common files.', e);
-    filesToFetch = COMMON_FILES;
+    filesToFetch = COMMON_FILES.map(p => ({ path: p }));
   }
 
   const files: FileSummary[] = [];
@@ -74,7 +77,7 @@ export const fetchRepoData = async (url: string, token?: string): Promise<RepoDa
 
   for (let i = 0; i < filesToFetch.length; i += BATCH_SIZE) {
       const batch = filesToFetch.slice(i, i + BATCH_SIZE);
-      const promises = batch.map(path => fetchFileContent(owner, repo, defaultBranch, path, token));
+      const promises = batch.map(f => fetchFileContent(octokit, owner, repo, defaultBranch, f.path, f.sha));
       const results = await Promise.all(promises);
       results.forEach(f => {
           if (f) files.push(f);
@@ -82,40 +85,64 @@ export const fetchRepoData = async (url: string, token?: string): Promise<RepoDa
   }
 
   if (files.length === 0) {
-    throw new Error('Could not fetch any readable files from this repository.');
+    throw new Error('Could not fetch any readable files. Ensure the repo is not empty and your token has permissions.');
   }
 
   return { url, files };
 };
 
-async function fetchFileContent(owner: string, repo: string, branch: string, path: string, token?: string): Promise<FileSummary | null> {
+async function fetchFileContent(octokit: Octokit, owner: string, repo: string, branch: string, path: string, sha?: string): Promise<FileSummary | null> {
     try {
-      const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
-      const headers: HeadersInit = {};
-      if (token) {
-          headers['Authorization'] = `token ${token}`;
-      }
+        let contentBase64 = '';
+        
+        // Strategy 1: Git Blob API (Preferred: Cheaper, supports up to 100MB, requires SHA)
+        if (sha) {
+            const { data } = await octokit.request('GET /repos/{owner}/{repo}/git/blobs/{file_sha}', {
+                owner,
+                repo,
+                file_sha: sha,
+            });
+            contentBase64 = data.content;
+        } 
+        // Strategy 2: Contents API (Fallback: Supports up to 1MB, no SHA needed)
+        else {
+             const { data } = await octokit.request('GET /repos/{owner}/{repo}/contents/{path}', {
+                owner,
+                repo,
+                path,
+                ref: branch
+            });
+            
+            if (Array.isArray(data) || !data.content) return null; // Directory or no content
+            contentBase64 = data.content;
+        }
 
-      const res = await fetch(rawUrl, { headers });
-      
-      if (!res.ok) return null;
-      
-      const text = await res.text();
-      // Binary check
-      if (text.includes('\u0000')) return null;
+        // Clean base64 (remove newlines)
+        const cleanBase64 = contentBase64.replace(/\n/g, '');
+        
+        // Decode with UTF-8 support
+        const binaryString = atob(cleanBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        const text = new TextDecoder().decode(bytes);
 
-      // Limit individual file size to avoid blowing up memory/token limits with a single massive log file
-      // 300KB is generous for code files; anything larger is likely not optimal for LLM context anyway
-      if (text.length > 300000) {
-         return null;
-      }
+        // Binary check
+        if (text.includes('\u0000')) return null;
+        
+        // Size Check (approx chars)
+        if (text.length > 300000) return null;
 
-      return {
-        path,
-        contentSnippet: text // Full text up to limit
-      };
+        return {
+            path,
+            contentSnippet: text
+        };
+
     } catch (e) {
-      return null;
+        // Silent fail for individual files
+        // console.warn(`Failed to fetch content for ${path}`, e);
+        return null;
     }
 }
 

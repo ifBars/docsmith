@@ -189,7 +189,6 @@ const App: React.FC = () => {
 
         <div className="mt-auto">
           <NavItem icon={Github} href="https://github.com/ifBars/docsmith" />
-          <NavItem icon={Settings} />
         </div>
       </nav>
 
