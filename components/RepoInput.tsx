@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/Button';
-import { Terminal, Command, Hash, Loader2 } from 'lucide-react';
+import { Terminal, Command, Hash, Loader2, Lock, Key } from 'lucide-react';
 
 export type AnalysisStep = 'CONNECT' | 'FETCH' | 'ANALYZE' | 'GENERATE';
 
@@ -17,7 +17,7 @@ export interface LoadingState {
 }
 
 interface RepoInputProps {
-  onAnalyze: (url: string) => void;
+  onAnalyze: (url: string, token?: string) => void;
   loadingState: LoadingState | null;
 }
 
@@ -164,11 +164,13 @@ const CircuitBackground = () => {
 
 export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState }) => {
   const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [showTokenInput, setShowTokenInput] = useState(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (url.trim()) onAnalyze(url);
+    if (url.trim()) onAnalyze(url, token);
   };
 
   // Auto-scroll logs
@@ -207,37 +209,63 @@ export const RepoInput: React.FC<RepoInputProps> = ({ onAnalyze, loadingState })
         </div>
 
         <div className="bg-zinc-900 border border-zinc-700 p-1 shadow-2xl shadow-black/50 transition-all duration-300">
-          <form onSubmit={handleSubmit} className="flex flex-col md:flex-row gap-0">
-            <div className="flex-grow relative group">
-              <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                <Command className="h-4 w-4 text-zinc-500" />
-              </div>
-              <input
-                type="text"
-                className="block w-full h-14 pl-12 pr-4 bg-zinc-950 text-white placeholder-zinc-600 focus:outline-none focus:bg-zinc-900 font-mono text-sm transition-colors border-none disabled:opacity-50"
-                placeholder="Paste repository URL..."
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                disabled={isLoading}
-                autoFocus
-              />
+          <form onSubmit={handleSubmit} className="flex flex-col gap-0">
+            <div className="flex flex-col md:flex-row gap-0 border-b border-zinc-800">
+                <div className="flex-grow relative group">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <Command className="h-4 w-4 text-zinc-500" />
+                </div>
+                <input
+                    type="text"
+                    className="block w-full h-14 pl-12 pr-4 bg-zinc-950 text-white placeholder-zinc-600 focus:outline-none focus:bg-zinc-900 font-mono text-sm transition-colors border-none disabled:opacity-50"
+                    placeholder="https://github.com/owner/repo"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    disabled={isLoading}
+                    autoFocus
+                />
+                </div>
+                
+                <Button 
+                type="submit" 
+                size="lg" 
+                className="h-14 md:w-48 rounded-none" 
+                loading={isLoading}
+                disabled={!url}
+                icon={<Hash className="w-4 h-4" />}
+                >
+                INITIALIZE
+                </Button>
             </div>
             
-            <Button 
-              type="submit" 
-              size="lg" 
-              className="h-14 md:w-48 rounded-none" 
-              loading={isLoading}
-              disabled={!url}
-              icon={<Hash className="w-4 h-4" />}
-            >
-              INITIALIZE
-            </Button>
+            {/* Optional Token Input Toggle */}
+            <div className="bg-zinc-950 px-4 py-2 flex items-center justify-between">
+                 <button 
+                    type="button"
+                    onClick={() => setShowTokenInput(!showTokenInput)}
+                    className="text-[10px] font-mono text-zinc-600 hover:text-zinc-400 flex items-center gap-2 uppercase tracking-wide"
+                 >
+                     <Key className="w-3 h-3" />
+                     {showTokenInput ? 'Hide Authentication' : 'Add Github Token (Optional)'}
+                 </button>
+                 {showTokenInput && (
+                     <div className="flex items-center gap-2 flex-1 ml-4 animate-in slide-in-from-left-2">
+                        <Lock className="w-3 h-3 text-zinc-500" />
+                        <input 
+                            type="password"
+                            value={token}
+                            onChange={(e) => setToken(e.target.value)}
+                            placeholder="ghp_xxxxxxxxxxxx"
+                            className="bg-transparent border-b border-zinc-800 focus:border-accent w-full text-xs text-zinc-300 font-mono focus:outline-none py-1 placeholder-zinc-700"
+                        />
+                     </div>
+                 )}
+            </div>
           </form>
         </div>
 
         <div className="mt-8 flex justify-center gap-8 text-xs font-mono text-zinc-600">
-           <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> CLEAR DOCUMENTATION</span>
+           <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> OCTOKIT INTEGRATED</span>
            <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> GEMINI 3 PRO</span>
            <span className="flex items-center gap-2"><div className="w-1.5 h-1.5 bg-zinc-600"></div> MARKDOWN OUTPUT</span>
         </div>

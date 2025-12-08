@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, Schema, FunctionDeclaration } from "@google/genai";
 import { DocFramework, FileSummary, RepoContext, Section, DocFile, ReferenceRepo, SectionProposal } from '../types';
 import { embedChunks, retrieveContext } from './ragService';
-import { fetchRepoData } from './mockGithubService';
+import { fetchRepoData } from './githubService';
 
 const apiKey = process.env.API_KEY || ''; 
 const ai = new GoogleGenAI({ apiKey });
@@ -300,7 +300,7 @@ const refineArtifactsWithBenchmarks = async (context: RepoContext): Promise<Repo
     - Read the Benchmarks. They represent specific, verified facts about the codebase.
     - Read the Current Artifacts.
     - If an Artifact contradicts a Benchmark, rewrite the Artifact section to match the Benchmark.
-    - If a Benchmark contains specific details (variable names, logic paths) that are missing from the Artifacts, enrich the Artifacts with these details.
+    - If a Benchmark contains specific details (variable names, logic paths) that are missing from the Artifacts, enrich the Artifacts with details.
     - Return the fully updated Artifacts object.
   `;
 
@@ -335,11 +335,12 @@ const refineArtifactsWithBenchmarks = async (context: RepoContext): Promise<Repo
 export const processReferenceRepo = async (
   repoUrl: string, 
   context: RepoContext,
-  onProgress?: (status: string) => void
+  onProgress?: (status: string) => void,
+  token?: string
 ): Promise<RepoContext> => {
   try {
      if (onProgress) onProgress("Fetching reference repo...");
-     const repoData = await fetchRepoData(repoUrl);
+     const repoData = await fetchRepoData(repoUrl, token);
      
      if (onProgress) onProgress("Indexing reference usage patterns...");
      const chunks = await embedChunks(repoData.files, 'REFERENCE');

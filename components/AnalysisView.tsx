@@ -8,9 +8,10 @@ interface AnalysisViewProps {
   context: RepoContext;
   onNext: () => void;
   onUpdateContext?: (context: RepoContext) => void;
+  githubToken?: string;
 }
 
-export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext, onUpdateContext }) => {
+export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext, onUpdateContext, githubToken }) => {
   const [showBenchmarks, setShowBenchmarks] = useState(true);
   const [refRepoUrl, setRefRepoUrl] = useState('');
   const [isProcessingRef, setIsProcessingRef] = useState(false);
@@ -38,7 +39,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ context, onNext, onU
      if (!refRepoUrl) return;
      setIsProcessingRef(true);
      try {
-        const updatedContext = await processReferenceRepo(refRepoUrl, localContext);
+        const updatedContext = await processReferenceRepo(refRepoUrl, localContext, undefined, githubToken);
         setLocalContext(updatedContext);
         setRefRepoUrl('');
         if (onUpdateContext) {

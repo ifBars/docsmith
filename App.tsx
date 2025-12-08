@@ -4,7 +4,7 @@ import { RepoInput, LoadingState, AnalysisStep, LogEntry } from './components/Re
 import { AnalysisView } from './components/AnalysisView';
 import { DocPlanner } from './components/DocPlanner';
 import { DocEditor } from './components/DocEditor';
-import { fetchRepoData } from './services/mockGithubService';
+import { fetchRepoData } from './services/githubService';
 import { analyzeRepo, proposeFileStructure } from './services/geminiService';
 import { SquareTerminal, FileSearch, Edit3, Settings, Github, Command } from 'lucide-react';
 
@@ -17,6 +17,7 @@ const App: React.FC = () => {
   const [activeFramework, setActiveFramework] = useState<DocFramework | null>(null);
   const [projectFiles, setProjectFiles] = useState<DocFile[]>([]);
   const [sourceFiles, setSourceFiles] = useState<FileSummary[]>([]);
+  const [githubToken, setGithubToken] = useState<string | undefined>(undefined);
 
   // We need refs to access current state inside intervals without dependencies
   const logsRef = useRef<LogEntry[]>([]);
@@ -40,12 +41,13 @@ const App: React.FC = () => {
     });
   };
 
-  const handleAnalyze = async (url: string) => {
+  const handleAnalyze = async (url: string, token?: string) => {
     // Reset
     logsRef.current = [];
     progressRef.current = 0;
     setSourceFiles([]);
     setRepoContext(null); // Clear previous context
+    if (token) setGithubToken(token);
     
     // Phase 1: Connection
     updateLoading("Initializing secure connection...", 'CONNECT', 5, "Resolving host github.com...");
@@ -56,7 +58,7 @@ const App: React.FC = () => {
 
       // Phase 2: Fetch
       updateLoading("Retrieving repository metadata...", 'FETCH', 15, `Targeting repository: ${url}`);
-      const repoData = await fetchRepoData(url);
+      const repoData = await fetchRepoData(url, token);
       setSourceFiles(repoData.files); // Store raw files
       
       updateLoading("Processing source files...", 'FETCH', 25, `Successfully retrieved ${repoData.files.length} candidate files.`);
@@ -203,6 +205,7 @@ const App: React.FC = () => {
               context={repoContext} 
               onNext={() => setStep(AppStep.PLANNING)}
               onUpdateContext={setRepoContext}
+              githubToken={githubToken}
             />
           )}
 
