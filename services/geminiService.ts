@@ -7,9 +7,11 @@ const apiKey = process.env.API_KEY || '';
 const ai = new GoogleGenAI({ apiKey });
 
 // Heavy lifting: Analysis & Architecture Planning
-const ANALYSIS_MODEL = "gemini-3-pro-preview";
+// const ANALYSIS_MODEL = "gemini-3-pro-preview";
+const ANALYSIS_MODEL = "gemini-2.5-pro";
 // Fast response: Drafting & Refinement
-const DRAFTING_MODEL = "gemini-2.5-flash"; 
+//const DRAFTING_MODEL = "gemini-2.5-flash";
+const DRAFTING_MODEL = "gemini-flash-latest";
 
 export const analyzeRepo = async (
   files: FileSummary[], 

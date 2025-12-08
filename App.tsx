@@ -6,7 +6,7 @@ import { DocPlanner } from './components/DocPlanner';
 import { DocEditor } from './components/DocEditor';
 import { fetchRepoData } from './services/githubService';
 import { analyzeRepo, proposeFileStructure } from './services/geminiService';
-import { SquareTerminal, FileSearch, Edit3, Settings, Github, Command } from 'lucide-react';
+import { SquareTerminal, FileSearch, Edit3, Github, Command } from 'lucide-react';
 
 const App: React.FC = () => {
   const [step, setStep] = useState<AppStep>(AppStep.LANDING);
